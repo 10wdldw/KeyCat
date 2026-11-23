@@ -236,21 +236,37 @@
     pts.unshift(new THREE.Vector2(0, -0.06));
     return new THREE.LatheGeometry(new THREE.SplineCurve(pts).getSpacedPoints(30), 40);
   };
-  const earGeo = earLathe(0), earRimGeo = earLathe(0.026);
+  const earShape = [earLathe(0), earLathe(0.026)];
+  // Bigger ears (the Devon's) grow taller and broader above the base, but the base keeps its
+  // size, so it stays sunk inside the head instead of bulging out past the cheek. The markings
+  // read the unscaled shape (`rest`), so the inner ear grows with the ear.
+  const earGeos = {};
+  const earGeo = k => earGeos[k] || (earGeos[k] = earShape.map(base => {
+    const g = base.clone(), pos = g.attributes.position;
+    g.setAttribute('rest', pos.clone());
+    for (let i = 0; i < pos.count; i++) {
+      const w = 1 + (k - 1) * smooth(-0.06, 0.2, pos.getY(i));
+      pos.setXYZ(i, pos.getX(i) * w, -0.06 + (pos.getY(i) + 0.06) * (1 + 0.6 * (k - 1)), pos.getZ(i) * w);
+    }
+    g.computeVertexNormals();
+    return g;
+  }));
   const ears = [-1, 1].map(s => {
     const g = new THREE.Group();
     // Sunk deep enough that the flared base stays inside the head's outline.
     g.position.set(s * 0.26, 0.21, -0.06);
     g.rotation.set(-0.12, 0, -s * 0.2);
     g.scale.set(1, 1.12, 1);
-    const e = new THREE.Mesh(earGeo, fur.ears[s < 0 ? 0 : 1]);
+    const [geo, rimGeo] = earGeo(1);
+    const e = new THREE.Mesh(geo, fur.ears[s < 0 ? 0 : 1]);
     e.scale.set(1, 1, 0.5);
-    const r = new THREE.Mesh(earRimGeo, rimMat);
+    const r = new THREE.Mesh(rimGeo, rimMat);
     r.scale.set(1, 1, 0.5 + 0.06);
     r.renderOrder = -1;
     g.add(r, e);
     head.add(g);
-    return { group: g, mesh: e, s };
+    // `tilt`: how far the ear leans out at rest; the behaviour adds its swivel to it.
+    return { group: g, mesh: e, rim: r, s, tilt: 0.2 };
   });
 
   // Eyes sit on the face surface and face along its normal.
@@ -429,15 +445,18 @@
   }
 
   // Coats, drawn from real cats: each has its own nose, inner ear, muzzle and bib colours, and the
-  // `eye` it most often has. `tabby` lists the stripe colour for coats that can be striped.
-  // `shade` is the soft volume shading; black stays a flat silhouette like the reference.
+  // `eye` it most often has. `tabby` lists the stripe colour for coats that can be striped, and
+  // `striped` ones wear the stripes unless the pattern is set to solid. `point` and `points` give
+  // the dark mask, ears, legs and tail of colourpoint breeds; `curl` the waves of a rex coat in the
+  // `wave` colour, and `ears` scales the ears. `shade` is the soft volume shading; black stays a
+  // flat silhouette like the reference.
   const COATS = {
     black: { fur: '#151515', ink: '#151515', rim: '#f6f3e8', arm: '#8a8984', paw: '#f7f6f0', toe: '#b9b7ae', whisker: '#dedcd4', eye: 'gold' },
     tuxedo: { fur: '#1a1a1a', ink: '#151515', lid: '#e4c25a', rim: '#f6f3e8', arm: '#8a8984', paw: '#f8f7f2', toe: '#bcbab2', whisker: '#e8e6de', eye: 'green',
       light: '#f8f7f2', muzzle: 1, tuxedo: 1, nose: '#e7a0a0', mouth: '#9a8f88', inner: '#3a2e2e', innerAmt: 1, shade: 0.25 },
     orange: { fur: '#eda25a', ink: '#b8712f', lid: '#8a4a1f', rim: '#fff8ea', arm: '#b8712f', paw: '#fff6e8', toe: '#e0b991', whisker: '#fffaf0', eye: 'green',
       light: '#fff1dc', muzzle: 1, bib: 1, nose: '#e58a78', mouth: '#a5643a', inner: '#f4b6a2', innerAmt: 1, shade: 0.55,
-      tabby: '#c46a2b' },
+      tabby: '#c46a2b', striped: true },
     grey: { fur: '#8995a4', ink: '#5f6a78', lid: '#3d4450', rim: '#f6f5f0', arm: '#5f6a78', paw: '#f2f1ec', toe: '#bfc3c8', whisker: '#f4f2ea', eye: 'amber',
       light: '#b8c1cc', muzzle: 0.8, bib: 0.6, nose: '#6d6f7d', mouth: '#56606d', inner: '#c9aeb4', innerAmt: 1, shade: 0.55,
       tabby: '#5e6a79' },
@@ -445,6 +464,23 @@
       nose: '#f0a3a3', mouth: '#c99c94', inner: '#f6c3c3', innerAmt: 1, shade: 0.5 },
     calico: { fur: '#fbf8f1', ink: '#c2b8a8', lid: '#6e5a4e', rim: '#8b8172', arm: '#c9c1b2', paw: '#fbf8f1', toe: '#e0c9c2', whisker: '#b6ada0', eye: 'gold',
       patchA: '#e5964a', patchB: '#2b2522', calico: 1, nose: '#eea29a', mouth: '#b08a80', inner: '#f2bcb6', innerAmt: 1, shade: 0.5 },
+    // Seal point: cream body, dark brown mask, ears, legs, paws and tail.
+    siamese: { fur: '#f0e4cf', ink: '#8b6f5c', rim: '#8b7a68', arm: '#6e5444', paw: '#5a4033', toe: '#3b2a21', whisker: '#f3ece0', eye: 'blue',
+      point: '#4b3428', points: 1, nose: '#2f211b', mouth: '#24180f', inner: '#6d5244', innerAmt: 1, shade: 0.45 },
+    // Seal bicolour: softer points, white inverted V on the face, white chest and mitts.
+    ragdoll: { fur: '#f5eee3', ink: '#a8927f', rim: '#8b8172', arm: '#a8927f', paw: '#fdfbf7', toe: '#ddd2c6', whisker: '#cfc4b6', eye: 'blue',
+      point: '#6f5242', points: 1, light: '#fdfbf7', muzzle: 1, tuxedo: 1, bib: 1, nose: '#e39b98', mouth: '#a07e70', inner: '#9a7466', innerAmt: 1, shade: 0.5 },
+    // Devon rex: big low-set ears and a short wavy coat, here in lilac.
+    devon: { fur: '#b3a8ad', ink: '#7f7479', lid: '#5b5156', rim: '#fbf9f6', arm: '#7f7479', paw: '#efeaec', toe: '#c3b9be', whisker: '#fbf9f6', eye: 'gold',
+      light: '#d9d1d5', muzzle: 0.8, wave: '#9a8f95', curl: 1, ears: 1.45, nose: '#d79a9e', mouth: '#7f7479', inner: '#e8b9bf', innerAmt: 1, shade: 0.5 },
+    // American shorthair: silver with black tabby stripes.
+    silver: { fur: '#c7ccd1', ink: '#7d838a', lid: '#3f444a', rim: '#fbfbf8', arm: '#7d838a', paw: '#f1f2f2', toe: '#b6bcc2', whisker: '#fbfbf8', eye: 'green',
+      light: '#f1f2f2', muzzle: 1, bib: 0.8, nose: '#c98a8a', mouth: '#6c7279', inner: '#e5b8bb', innerAmt: 1, shade: 0.55,
+      tabby: '#2e3136', striped: true },
+    // Chinese li hua: brown mackerel tabby.
+    lihua: { fur: '#a98a62', ink: '#6e5640', lid: '#3d2f22', rim: '#fff8ec', arm: '#6e5640', paw: '#efe5d3', toe: '#c9b493', whisker: '#fff8ec', eye: 'green',
+      light: '#eadfca', muzzle: 1, bib: 0.7, nose: '#b8735f', mouth: '#5e4836', inner: '#d9a894', innerAmt: 1, shade: 0.55,
+      tabby: '#3d2f22', striped: true },
   };
   const EYES = { gold: '#dcb64a', green: '#93c255', blue: '#6eb2e6', amber: '#e59a32', copper: '#d9792f' };
   // Catchlight dots per style: [x (outer side +), y, radius].
@@ -460,9 +496,16 @@
   function setLook(o) {
     Object.assign(look, o);
     const c = COATS[look.coat] || COATS.black;
-    const striped = c.tabby && (look.pattern === 'tabby' || (look.pattern === 'auto' && look.coat === 'orange'));
+    const striped = c.tabby && (look.pattern === 'tabby' || (look.pattern === 'auto' && c.striped));
     const solid = look.style === '3d';
-    K.setFur({ ...c, dark: c.tabby || c.fur, stripes: striped ? 1 : 0, shade: solid ? c.shade : 0 });
+    K.setFur({ ...c, dark: c.tabby || c.wave || c.fur, stripes: striped ? 1 : 0, shade: solid ? c.shade : 0 });
+    const [geo, rimGeo] = earGeo(c.ears || 1);
+    for (const e of ears) {
+      e.mesh.geometry = geo;
+      e.rim.geometry = rimGeo;
+      // Big ears lean further out, set low and wide on the head as a Devon's are.
+      e.tilt = 0.2 + 0.5 * ((c.ears || 1) - 1);
+    }
     K.mouseProp.setStyle(look.style);
     chinLine.visible = !solid;
     chinMat.uniforms.uColor.value.set(c.ink || c.arm);
