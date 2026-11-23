@@ -1,0 +1,79 @@
+{
+  "name": "keycat-win",
+  "productName": "KeyCat",
+  "version": "1.0.1",
+  "description": "KeyCat for Windows: a black cat living in the notification area",
+  "author": "ElloboDK",
+  "license": "MIT",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "dist:dir": "electron-builder --win dir"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11",
+    "uiohook-napi": "^1.5.5"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.ellobok.keycat",
+    "productName": "KeyCat",
+    "copyright": "Copyright © ElloboDK",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "keymap.js",
+      "store.js",
+      "assets/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../web",
+        "to": "web"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/uiohook-napi/**",
+      "assets/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "artifactName": "KeyCat-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "KeyCat",
+      "artifactName": "KeyCat-Setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ElloboDK",
+        "repo": "KeyCat"
+      }
+    ]
+  }
+}
