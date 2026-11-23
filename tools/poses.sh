@@ -6,15 +6,12 @@
 set -eu
 TAB="$1"; shift
 CROP="${CROP:-120,80,300,250}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$(dirname "$0")/lib.sh"
 OUT="$ROOT/snaps/poses"
 mkdir -p "$OUT"
 rm -f "$OUT"/*.png
-js() { cxb browser js "$1" --tab "$TAB" >/dev/null; }
 
-cxb browser viewport --width 360 --height 300 --tab "$TAB" >/dev/null
-cxb browser goto "http://127.0.0.1:8765/index.html?dev&nopointer&bg=f8d987&crop=$CROP&v=$(date +%s)" --tab "$TAB" >/dev/null
-sleep 1
+open_scene 360 300 "crop=$CROP"
 # Each pose: setup, then 1.5 s of frames (actions inside `tick` run every frame, e.g. moving the mouse).
 POSES="idle|cat.cursor(175,60)|
 mouse|cat.cursor(40,310)|cat.mouseMove(-8,2)
@@ -28,7 +25,7 @@ for o in "$@"; do
   echo "$POSES" | while IFS='|' read -r name setup tick; do
     js "cat.mouseButton(false); cat.pet(false); cat.reset(); cat.options($o); cat.freeze(); $setup; for (let i = 0; i < 90; i++) { $tick; cat.step(1/60); } return 1"
     sleep 0.2
-    cxb browser screenshot --tab "$TAB" --out "$OUT/$(printf %02d_%02d $r $c).png" >/dev/null
+    snap "$OUT/$(printf %02d_%02d $r $c).png"
     r=$((r + 1))
   done
   c=$((c + 1))

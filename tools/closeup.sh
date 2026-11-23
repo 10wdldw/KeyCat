@@ -4,17 +4,12 @@
 # Needs tools/serve.py running.
 set -eu
 TAB="$1"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$(dirname "$0")/lib.sh"
 OUT="$ROOT/snaps/close"
 mkdir -p "$OUT"
-js() { cxb browser js "$1" --tab "$TAB" >/dev/null; }
-view() {
-  cxb browser goto "http://127.0.0.1:8765/index.html?dev&nopointer&bg=f8d987&crop=$1&v=$(date +%s)" --tab "$TAB" >/dev/null
-  sleep 0.8
-}
-shot() { sleep "${2:-0.8}"; cxb browser screenshot --tab "$TAB" --out "$OUT/$1.png" >/dev/null; }
+view() { open_scene 480 400 "crop=$1"; }
+shot() { sleep "${2:-0.8}"; snap "$OUT/$1.png"; }
 
-cxb browser viewport --width 480 --height 400 --tab "$TAB" >/dev/null
 view "190,60,160,133"; js "cat.reset(); cat.cursor(240, 60); return 1"; shot head
 view "200,140,160,133"; js "cat.reset(); cat.cursor(240, 60); return 1"; shot neck
 view "250,220,160,133"; js "cat.reset(); cat.cursor(240, 60); cat.key('KeyF', true); return 1"; shot paw 1

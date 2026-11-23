@@ -154,12 +154,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScri
         webView.reload()
     }
 
-    /// Appends to ~/Library/Application Support/KeyCat/log.txt (lifecycle only, never input).
-    func log(_ text: String) {
+    /// ~/Library/Application Support/KeyCat/<name>, creating the folder if needed.
+    func supportFile(_ name: String) -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("KeyCat")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("log.txt")
+        return dir.appendingPathComponent(name)
+    }
+
+    /// Appends to log.txt in the support folder (lifecycle only, never input).
+    func log(_ text: String) {
+        let url = supportFile("log.txt")
         let line = "\(Date()) \(text)\n".data(using: .utf8)!
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()
@@ -307,10 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScri
                 let access = CGPreflightListenEventAccess() ? "granted" : "missing"
                 let line = "\(Date()) keyboard=\(self.keyboardAllowed ? "active" : "waiting for permission") "
                     + "inputMonitoring=\(access) keyEvents=\(self.keyEvents) fps=\(fps)\n"
-                let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("KeyCat")
-                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                try? line.write(to: dir.appendingPathComponent("status.txt"), atomically: true, encoding: .utf8)
+                try? line.write(to: self.supportFile("status.txt"), atomically: true, encoding: .utf8)
             }
         }
     }

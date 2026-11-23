@@ -57,5 +57,4 @@ final class SettingsWindow: NSObject, WKScriptMessageHandler, WKNavigationDelega
             app.js(test == "annoy" ? "cat.annoyNow()" : "cat.curiousNow(3)")
         }
     }
-
 }

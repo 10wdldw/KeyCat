@@ -1,5 +1,5 @@
 #!/bin/sh
-# Signs $1 with a local self-signed identity kept in signing/ next to this project.
+# Signs $1 with a local self-signed identity kept in signing/ at the repo root (gitignored).
 # Ad-hoc signatures change on every build, which makes macOS forget the Input Monitoring
 # grant; a fixed certificate keeps the app's identity, so the grant survives rebuilds.
 set -eu

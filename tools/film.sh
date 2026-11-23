@@ -4,15 +4,12 @@
 # Needs tools/serve.py running.
 set -eu
 TAB="$1"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$(dirname "$0")/lib.sh"
 OUT="$ROOT/snaps/film"
 rm -rf "$OUT"; mkdir -p "$OUT"
-js() { cxb browser js "$1" --tab "$TAB" >/dev/null; }
-shot() { cxb browser screenshot --tab "$TAB" --out "$OUT/$1.png" >/dev/null; }
+shot() { snap "$OUT/$1.png"; }
 
-cxb browser goto "http://127.0.0.1:8765/index.html?dev&nopointer&full&bg=f8d987&v=$(date +%s)" --tab "$TAB" >/dev/null
-cxb browser viewport --width 539 --height 458 --tab "$TAB" >/dev/null
-sleep 1
+open_scene 539 458 "full"
 
 # Mouse: drag left for 0.5 s, stop, then let go of the mouse.
 js "cat.reset(); cat.cursor(270, 120); cat.freeze(); cat.step(0.5); return 1"

@@ -1,5 +1,5 @@
 'use strict';
-// The Windows host for the web scene in ../web. Mirrors the mac build's App.swift/AppMenu.swift:
+// The Windows host for the web scene in ../web. Mirrors the mac build's mac/App.swift and mac/AppMenu.swift:
 // a transparent, click-through floating window reports the pointer to the page, forwards global
 // keyboard and mouse input, and offers the same tray menu. electron-updater handles updates.
 const { app, BrowserWindow, Menu, Tray, nativeImage, screen, ipcMain } = require('electron');
@@ -10,7 +10,7 @@ const Store = require('./store');
 const KeyMap = require('./keymap');
 
 const isMac = process.platform === 'darwin';
-const DESIGN = { width: 360, height: 368 }; // App.swift designSize at scale 1
+const DESIGN = { width: 360, height: 368 }; // mac/App.swift designSize at scale 1
 
 let panel = null;
 let tray = null;
@@ -329,18 +329,20 @@ function startInputHook() {
 
 // MARK: Menu
 
-function radios(key, getter, options) {
-  return options.map(([label, value]) => ({
-    label,
-    type: 'radio',
-    checked: getter() === value,
-    click: () => {
-      store.set(key, value);
-      pushOptions();
-      rebuildMenu();
-    },
-  }));
+// Saves a look setting, sends it to the cat and redraws the menu so the checkmarks follow.
+function setOption(key, value) {
+  store.set(key, value);
+  pushOptions();
+  rebuildMenu();
 }
+
+function radios(options, current, pick) {
+  return options.map(([label, value]) => ({ label, type: 'radio', checked: current === value, click: () => pick(value) }));
+}
+
+const choice = (key, current, options) => radios(options, current, value => setOption(key, value));
+
+const toggle = (label, key, on) => ({ label, type: 'checkbox', checked: on, click: () => setOption(key, !on) });
 
 function updateItem() {
   if (!app.isPackaged) return { label: `开发模式 v${app.getVersion()}`, enabled: false };
@@ -377,129 +379,60 @@ function autoLaunchItem() {
 }
 
 function buildTemplate() {
+  const coat = getCoat();
   const template = [
     {
       label: '立体效果（3D）',
       type: 'checkbox',
       checked: getStyle() === '3d',
-      click: () => {
-        store.set('style', getStyle() === '3d' ? '2d' : '3d');
-        pushOptions();
-        rebuildMenu();
-      },
+      click: () => setOption('style', getStyle() === '3d' ? '2d' : '3d'),
     },
     {
       label: '毛色',
-      submenu: radios('coat', getCoat, [
+      submenu: choice('coat', coat, [
         ['黑猫', 'black'], ['奶牛猫', 'tuxedo'], ['橘猫', 'orange'],
         ['蓝灰猫', 'grey'], ['白猫', 'white'], ['三花猫', 'calico'],
       ]),
     },
   ];
-  if (getCoat() === 'orange' || getCoat() === 'grey') {
-    const striped = getPattern() === 'tabby' || (getPattern() === 'auto' && getCoat() === 'orange');
-    template.push({
-      label: '花纹',
-      submenu: [
-        {
-          label: '纯色', type: 'radio', checked: !striped,
-          click: () => {
-            store.set(`pattern.${getCoat()}`, 'solid');
-            pushOptions();
-            rebuildMenu();
-          },
-        },
-        {
-          label: '虎斑条纹', type: 'radio', checked: striped,
-          click: () => {
-            store.set(`pattern.${getCoat()}`, 'tabby');
-            pushOptions();
-            rebuildMenu();
-          },
-        },
-      ],
-    });
+  // Only coats whose stripes would show get the choice; black and white stay plain.
+  if (coat === 'orange' || coat === 'grey') {
+    const striped = getPattern() === 'tabby' || (getPattern() === 'auto' && coat === 'orange');
+    template.push({ label: '花纹', submenu: choice(`pattern.${coat}`, striped ? 'tabby' : 'solid', [['纯色', 'solid'], ['虎斑条纹', 'tabby']]) });
   }
   template.push({
     label: '外观',
     submenu: [
       {
         label: '眼睛颜色',
-        submenu: radios('eyeColor', getEyeColor, [
+        submenu: choice('eyeColor', getEyeColor(), [
           ['跟随毛色', 'auto'], ['金色', 'gold'], ['绿色', 'green'],
           ['蓝色', 'blue'], ['琥珀色', 'amber'], ['鸳鸯眼（一蓝一金）', 'odd'],
         ]),
       },
-      {
-        label: '眼睛高光',
-        submenu: radios('eyeShine', getEyeShine, [['无', 'none'], ['经典', 'classic'], ['闪亮', 'sparkle']]),
-      },
+      { label: '眼睛高光', submenu: choice('eyeShine', getEyeShine(), [['无', 'none'], ['经典', 'classic'], ['闪亮', 'sparkle']]) },
       {
         label: '项圈',
-        submenu: radios('collar', getCollar, [
-          ['无', 'none'], ['红色铃铛', 'red'], ['蓝色铃铛', 'blue'],
-          ['粉色铃铛', 'pink'], ['绿色铃铛', 'green'],
+        submenu: choice('collar', getCollar(), [
+          ['无', 'none'], ['红色铃铛', 'red'], ['蓝色铃铛', 'blue'], ['粉色铃铛', 'pink'], ['绿色铃铛', 'green'],
         ]),
       },
-      {
-        label: '腮红',
-        type: 'checkbox',
-        checked: getBlush(),
-        click: () => {
-          store.set('blush', !getBlush());
-          pushOptions();
-          rebuildMenu();
-        },
-      },
-      {
-        label: '胡须',
-        type: 'checkbox',
-        checked: getWhiskers(),
-        click: () => {
-          store.set('whiskers', !getWhiskers());
-          pushOptions();
-          rebuildMenu();
-        },
-      },
+      toggle('腮红', 'blush', getBlush()),
+      toggle('胡须', 'whiskers', getWhiskers()),
     ],
   });
   template.push({
     label: '大小',
-    submenu: [['小', 0.7], ['中', 0.9], ['大', 1.1], ['特大', 1.35]].map(([label, value]) => ({
-      label,
-      type: 'radio',
-      checked: Math.abs(getScale() - value) < 0.001,
-      click: () => {
-        applyScale(value, true);
-        rebuildMenu();
-      },
-    })),
+    submenu: radios([['小', 0.7], ['中', 0.9], ['大', 1.1], ['特大', 1.35]], getScale(), value => {
+      applyScale(value, true);
+      rebuildMenu();
+    }),
   });
   template.push({
     label: '多久睡着',
-    submenu: [
-      ['30 秒', 30], ['1 分钟', 60], ['3 分钟', 180], ['10 分钟', 600], ['不睡', 0],
-    ].map(([label, value]) => ({
-      label,
-      type: 'radio',
-      checked: getSleepAfter() === value,
-      click: () => {
-        store.set('sleepAfter', value);
-        pushOptions();
-        rebuildMenu();
-      },
-    })),
+    submenu: choice('sleepAfter', getSleepAfter(), [['30 秒', 30], ['1 分钟', 60], ['3 分钟', 180], ['10 分钟', 600], ['不睡', 0]]),
   });
-  template.push({
-    label: '隐私模式（不显示键名）',
-    type: 'checkbox',
-    checked: getPrivacy(),
-    click: () => {
-      store.set('privacy', !getPrivacy());
-      pushOptions();
-      rebuildMenu();
-    },
-  });
+  template.push(toggle('隐私模式（不显示键名）', 'privacy', getPrivacy()));
   template.push({ label: '调节反应…', click: openSettings });
   template.push({ type: 'separator' });
   template.push(autoLaunchItem());
