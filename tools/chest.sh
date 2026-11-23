@@ -6,13 +6,11 @@ set -eu
 TAB="$1"
 LOOK="${2:-}"
 [ -n "$LOOK" ] || LOOK="{coat:'orange',collar:'red',style:'2d'}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$(dirname "$0")/lib.sh"
 OUT="$ROOT/snaps/chest"
 mkdir -p "$OUT"
 rm -f "$OUT"/*.png
-cxb browser viewport --width 480 --height 400 --tab "$TAB" >/dev/null
-cxb browser goto "http://127.0.0.1:8765/index.html?dev&nopointer&bg=f8d987&crop=150,110,220,183&v=$(date +%s)" --tab "$TAB" >/dev/null
-sleep 1
+open_scene 480 400 "crop=150,110,220,183"
 i=0
 # name|setup|per-frame action (the loop variable is i)
 echo "idle|cat.cursor(175,60)|
@@ -24,9 +22,9 @@ mouse|cat.cursor(40,310)|cat.mouseMove(-8,2)
 pet|cat.cursor(172,110); cat.pet(true,180)|
 sleep|cat.sleepNow()|" | while IFS='|' read -r name setup tick; do
   frames=90; [ "$name" = sleep ] && frames=200
-  cxb browser js "cat.mouseButton(false); cat.pet(false); cat.reset(); cat.options($LOOK); cat.freeze(); $setup; for (let i = 0; i < $frames; i++) { $tick; cat.step(1/60); } return 1" --tab "$TAB" >/dev/null
+  js "cat.mouseButton(false); cat.pet(false); cat.reset(); cat.options($LOOK); cat.freeze(); $setup; for (let i = 0; i < $frames; i++) { $tick; cat.step(1/60); } return 1"
   sleep 0.2
-  cxb browser screenshot --tab "$TAB" --out "$OUT/$(printf %02d $i)_$name.png" >/dev/null
+  snap "$OUT/$(printf %02d $i)_$name.png"
   i=$((i + 1))
 done
 uv run --quiet --with pillow python - "$OUT" "$ROOT/snaps/chest.jpg" <<'EOF'

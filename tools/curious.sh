@@ -4,20 +4,17 @@
 # second, then frames after it stops. Uses the frozen dev clock. Needs tools/serve.py running.
 set -eu
 TAB="$1"; shift
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$(dirname "$0")/lib.sh"
 OUT="$ROOT/snaps/curious"
 mkdir -p "$OUT"
 rm -f "$OUT"/*.png
-js() { cxb browser js "$1" --tab "$TAB" >/dev/null; }
-cxb browser viewport --width 420 --height 350 --tab "$TAB" >/dev/null
-cxb browser goto "http://127.0.0.1:8765/index.html?dev&nopointer&bg=f8d987&crop=150,70,240,200&v=$(date +%s)" --tab "$TAB" >/dev/null
-sleep 1
+open_scene 420 350 "crop=150,70,240,200"
 # The pointer sweeps across the top of the window at about 2400 points per second.
 SWEEP="for (let i = 0; i < N; i++) { const x = 175 + 160 * Math.sin(i / 60 * 7); cat.cursor(x, 30); cat.mouseMove(40 * Math.cos(i / 60 * 7), 4); cat.step(1/60); }"
 r=0
 for o in "$@"; do
   js "cat.mouseButton(false); cat.reset(); cat.options($o); cat.freeze(); cat.cursor(175, 40); cat.step(1.5); return 1"
-  shot() { sleep 0.2; cxb browser screenshot --tab "$TAB" --out "$OUT/$(printf %02d_%d $r $1).png" >/dev/null; }
+  shot() { sleep 0.2; snap "$OUT/$(printf %02d_%d $r $1).png"; }
   shot 0
   js "const N = 18; $SWEEP return 1"; shot 1
   js "const N = 42; $SWEEP return 1"; shot 2

@@ -1,5 +1,11 @@
 import Cocoa
 
+/// What a menu item does when picked; kept in `representedObject` so one selector serves every option.
+final class MenuAction: NSObject {
+    let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
+}
+
 extension AppDelegate {
     func applyScale(_ s: CGFloat, keepOrigin: Bool) {
         scale = s
@@ -40,62 +46,56 @@ extension AppDelegate {
 
     func buildMenu(_ menu: NSMenu) {
         // Off is the flat 2D sticker look; on adds soft volume shading.
-        let styleItem = item("立体效果（3D）", #selector(toggleStyle))
-        styleItem.state = style == "3d" ? .on : .off
-        menu.addItem(styleItem)
+        menu.addItem(toggle("立体效果（3D）", style == "3d") { $0.style = $0.style == "3d" ? "2d" : "3d" })
         menu.addItem(submenu("毛色", [("黑猫", "black"), ("奶牛猫", "tuxedo"), ("橘猫", "orange"), ("蓝灰猫", "grey"),
-                                      ("白猫", "white"), ("三花猫", "calico")],
-                             selected: coat, action: #selector(pickCoat(_:))))
+                                      ("白猫", "white"), ("三花猫", "calico")], selected: coat) { $0.coat = $1 })
         // Only coats whose stripes would show get the choice; black and white stay plain.
         if coat == "orange" || coat == "grey" {
             let striped = pattern == "tabby" || (pattern == "auto" && coat == "orange")
             menu.addItem(submenu("花纹", [("纯色", "solid"), ("虎斑条纹", "tabby")],
-                                 selected: striped ? "tabby" : "solid", action: #selector(pickPattern(_:))))
+                                 selected: striped ? "tabby" : "solid") { $0.pattern = $1 })
         }
         let looks = NSMenuItem(title: "外观", action: nil, keyEquivalent: "")
         let lookMenu = NSMenu()
         lookMenu.addItem(submenu("眼睛颜色", [("跟随毛色", "auto"), ("金色", "gold"), ("绿色", "green"), ("蓝色", "blue"),
                                               ("琥珀色", "amber"), ("鸳鸯眼（一蓝一金）", "odd")],
-                                 selected: eyeColor, action: #selector(pickEyeColor(_:))))
+                                 selected: eyeColor) { $0.eyeColor = $1 })
         lookMenu.addItem(submenu("眼睛高光", [("无", "none"), ("经典", "classic"), ("闪亮", "sparkle")],
-                                 selected: eyeShine, action: #selector(pickEyeShine(_:))))
+                                 selected: eyeShine) { $0.eyeShine = $1 })
         lookMenu.addItem(submenu("项圈", [("无", "none"), ("红色铃铛", "red"), ("蓝色铃铛", "blue"), ("粉色铃铛", "pink"),
-                                          ("绿色铃铛", "green")],
-                                 selected: collar, action: #selector(pickCollar(_:))))
-        let blushItem = item("腮红", #selector(toggleBlush))
-        blushItem.state = blush ? .on : .off
-        lookMenu.addItem(blushItem)
-        let whiskerItem = item("胡须", #selector(toggleWhiskers))
-        whiskerItem.state = whiskers ? .on : .off
-        lookMenu.addItem(whiskerItem)
+                                          ("绿色铃铛", "green")], selected: collar) { $0.collar = $1 })
+        lookMenu.addItem(toggle("腮红", blush) { $0.blush.toggle() })
+        lookMenu.addItem(toggle("胡须", whiskers) { $0.whiskers.toggle() })
         looks.submenu = lookMenu
         menu.addItem(looks)
         menu.addItem(submenu("大小", [("小", 0.7), ("中", 0.9), ("大", 1.1), ("特大", 1.35)] as [(String, CGFloat)],
-                             selected: scale, action: #selector(pickSize(_:))))
+                             selected: scale) { $0.applyScale($1, keepOrigin: true) })
         menu.addItem(submenu("多久睡着", [("30 秒", 30), ("1 分钟", 60), ("3 分钟", 180), ("10 分钟", 600), ("不睡", 0)],
-                             selected: sleepAfter, action: #selector(pickSleep(_:))))
-        let privacyItem = item("隐私模式（不显示键名）", #selector(togglePrivacy))
-        privacyItem.state = privacy ? .on : .off
-        menu.addItem(privacyItem)
-        menu.addItem(item("调节反应…", #selector(openSettings)))
+                             selected: sleepAfter) { $0.sleepAfter = $1 })
+        menu.addItem(toggle("隐私模式（不显示键名）", privacy) { $0.privacy.toggle() })
+        menu.addItem(item("调节反应…") { $0.settings.show() })
         menu.addItem(.separator())
-        menu.addItem(item("回到右下角", #selector(resetPosition)))
-        menu.addItem(item(panel.isVisible ? "隐藏" : "显示", #selector(toggleVisible)))
+        menu.addItem(item("回到右下角") { $0.resetPosition() })
+        menu.addItem(item(panel.isVisible ? "隐藏" : "显示") { $0.toggleVisible() })
         menu.addItem(.separator())
         if !keyboardAllowed {
-            menu.addItem(item("开启「输入监控」权限…", #selector(openPrivacy)))
-            menu.addItem(item("授权后重新启动", #selector(relaunch)))
+            menu.addItem(item("开启「输入监控」权限…") { $0.openPrivacy() })
+            menu.addItem(item("授权后重新启动") { $0.relaunch() })
             menu.addItem(.separator())
         }
-        menu.addItem(item("退出 KeyCat", #selector(quit)))
+        menu.addItem(item("退出 KeyCat") { _ in NSApp.terminate(nil) })
     }
 
-    private func submenu<T: Equatable>(_ title: String, _ options: [(String, T)], selected: T, action: Selector) -> NSMenuItem {
+    /// Radio-style submenu. Picking an option runs `pick` and pushes the new look to the page.
+    private func submenu<T: Equatable>(_ title: String, _ options: [(String, T)], selected: T,
+                                       pick: @escaping (AppDelegate, T) -> Void) -> NSMenuItem {
         let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let sub = NSMenu()
         for (label, value) in options {
-            let i = item(label, action)
-            i.representedObject = value
+            let i = item(label) { app in
+                pick(app, value)
+                app.pushOptions()
+            }
             i.state = value == selected ? .on : .off
             sub.addItem(i)
         }
@@ -103,99 +103,46 @@ extension AppDelegate {
         return parent
     }
 
-    private func item(_ title: String, _ action: Selector) -> NSMenuItem {
-        let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        i.target = self
+    private func toggle(_ title: String, _ on: Bool, flip: @escaping (AppDelegate) -> Void) -> NSMenuItem {
+        let i = item(title) { app in
+            flip(app)
+            app.pushOptions()
+        }
+        i.state = on ? .on : .off
         return i
     }
 
-    @objc func pickCoat(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? String else { return }
-        coat = value
-        pushOptions()
+    private func item(_ title: String, _ run: @escaping (AppDelegate) -> Void) -> NSMenuItem {
+        let i = NSMenuItem(title: title, action: #selector(runMenuAction(_:)), keyEquivalent: "")
+        i.target = self
+        i.representedObject = MenuAction { [weak self] in if let self { run(self) } }
+        return i
     }
 
-    @objc func pickPattern(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? String else { return }
-        pattern = value
-        pushOptions()
-    }
+    @objc func runMenuAction(_ sender: NSMenuItem) { (sender.representedObject as? MenuAction)?.run() }
 
-    @objc func pickEyeColor(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? String else { return }
-        eyeColor = value
-        pushOptions()
-    }
-
-    @objc func pickEyeShine(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? String else { return }
-        eyeShine = value
-        pushOptions()
-    }
-
-    @objc func pickCollar(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? String else { return }
-        collar = value
-        pushOptions()
-    }
-
-    @objc func openSettings() { settings.show() }
-
-    @objc func toggleStyle() {
-        style = style == "3d" ? "2d" : "3d"
-        pushOptions()
-    }
-
-    @objc func toggleBlush() {
-        blush.toggle()
-        pushOptions()
-    }
-
-    @objc func toggleWhiskers() {
-        whiskers.toggle()
-        pushOptions()
-    }
-
-    @objc func pickSize(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? CGFloat else { return }
-        applyScale(value, keepOrigin: true)
-    }
-
-    @objc func pickSleep(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? Int else { return }
-        sleepAfter = value
-        pushOptions()
-    }
-
-    @objc func togglePrivacy() {
-        privacy.toggle()
-        pushOptions()
-    }
-
-    @objc func resetPosition() {
+    func resetPosition() {
         defaults.removeObject(forKey: "originX")
         defaults.removeObject(forKey: "originY")
         applyScale(scale, keepOrigin: false)
     }
 
-    @objc func toggleVisible() {
+    func toggleVisible() {
         if panel.isVisible { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
     }
 
-    @objc func openPrivacy() {
+    func openPrivacy() {
         CGRequestListenEventAccess()
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
             NSWorkspace.shared.open(url)
         }
     }
 
-    @objc func relaunch() {
+    func relaunch() {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
         task.arguments = ["-c", "sleep 0.5; open \"$0\"", Bundle.main.bundlePath]
         try? task.run()
         NSApp.terminate(nil)
     }
-
-    @objc func quit() { NSApp.terminate(nil) }
 }

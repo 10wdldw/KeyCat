@@ -1,16 +1,14 @@
 #!/bin/sh
 # Renders the web scene in several states via the built-in browser tab $1 and builds a contact sheet.
-# Needs `python3 -m http.server 8765` serving ../web.
+# Needs tools/serve.py running.
 set -eu
 TAB="$1"
-OUT="$(cd "$(dirname "$0")/.." && pwd)/snaps"
+. "$(dirname "$0")/lib.sh"
+OUT="$ROOT/snaps"
 mkdir -p "$OUT"
-js() { cxb browser js "$1" --tab "$TAB" >/dev/null; }
-shot() { sleep "${2:-0.5}"; cxb browser screenshot --tab "$TAB" --out "$OUT/$1.png" >/dev/null; }
+shot() { sleep "${2:-0.5}"; snap "$OUT/$1.png"; }
 
-cxb browser goto "http://127.0.0.1:8765/index.html?dev&nopointer&bg=f8d987&v=$(date +%s)" --tab "$TAB" >/dev/null
-cxb browser viewport --width 360 --height 368 --tab "$TAB" >/dev/null
-sleep 1
+open_scene 360 368
 js "cat.reset(); cat.cursor(175, 60); return 1"
 shot idle 0.8
 js "cat.reset(); cat.key('KeyQ', true); return 1"
