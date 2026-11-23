@@ -2,7 +2,9 @@
 
 一只趴在键盘上的桌面猫：你打字它伸爪按键，动鼠标它扭头看，摸头会闭眼，没人理会睡着，被烦到会用尾巴捶桌。支持 macOS 13+ 和 Windows 10+，除了从 GitHub 检查和下载更新，不联网。
 
-![KeyCat](docs/screenshots/curious.jpg)
+![KeyCat](docs/screenshots/keycat.gif)
+
+下载页：<https://ellobodk.github.io/KeyCat/>，会按访问者的系统给出对应的安装包，页面上的猫可以直接用键盘鼠标逗。
 
 ## 安装
 
@@ -19,7 +21,9 @@ curl -L -o /tmp/KeyCat-macOS.zip https://github.com/ElloboDK/KeyCat/releases/lat
 
 ## 使用
 
-猫住在菜单栏（Windows 是托盘）。右键猫或点图标打开菜单，可以换毛色和外观、调大小、设置多久睡着，在「调节反应…」里调整烦躁和好奇的灵敏度。按住猫身体可以拖动位置。
+猫住在菜单栏（Windows 是托盘）。右键猫或点图标打开菜单，可以换毛色和外观、调大小、设置多久睡着，在「调节反应…」里调整烦躁和好奇的灵敏度。按住猫身体可以拖动位置。直播或录屏时可以打开「鼠标穿透」，点击会直接落到猫下面的窗口，猫照常显示和反应，这时菜单只能从菜单栏或托盘图标打开。
+
+Windows 上很多游戏以管理员身份运行，普通权限的 KeyCat 收不到发给它们的按键，猫就不动了。在菜单里打开「以管理员身份运行」，KeyCat 会弹出 UAC 授权并以管理员身份重启，之后每次手动启动都会弹 UAC。开机自启这时改用计划任务，登录时直接以管理员身份启动，不弹 UAC。关掉这个选项后，要等 KeyCat 下次启动才恢复成普通权限。独占全屏的游戏会盖住所有窗口，这种情况下猫本身就看不到，请把游戏改成无边框窗口模式。
 
 ## 构建
 
@@ -48,7 +52,8 @@ mac 和 Windows 共用一个 Release，两边产物都要上传，否则另一�
 mac/    macOS 外壳（Swift）：浮窗、菜单、键鼠监听、自动更新、构建/签名/打包脚本
 win/    Windows 外壳（Tauri，Rust）：托盘、全局键鼠钩子、自动更新，页面由系统 WebView2 绘制
 web/    两端共用的 three.js 场景：猫、键盘、动作，tuning.js 是可调参数的唯一来源
-tools/  开发用渲染脚本（serve.py 起本地服务，其余脚本在内置浏览器里截图对比）
+site/   下载页，由 .github/workflows/pages.yml 连同 web/ 一起部署到 GitHub Pages，每 3 小时刷新一次下载量
+tools/  开发用渲染脚本（serve.py 起本地服务，readme_gif.py 生成 README 动图，其余脚本在内置浏览器里截图对比）
 ```
 
 ## 说明

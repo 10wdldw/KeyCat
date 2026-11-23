@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod autostart;
+mod elevate;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod hook;
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -32,6 +33,7 @@ use tauri::{
 };
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+use autostart::Mode;
 use hook::{Button, Input};
 use store::Store;
 
@@ -40,6 +42,8 @@ const PANEL: &str = "panel";
 const SETTINGS: &str = "settings";
 const TRAY: &str = "tray";
 const DEV: bool = cfg!(debug_assertions);
+/// tauri.conf.json `identifier`, which names the app data folder in %APPDATA%.
+const IDENTIFIER: &str = "com.ellobok.keycat";
 
 // The web scene talks to its host through `window.webkit.messageHandlers.<name>.postMessage`,
 // the WKWebView bridge the mac build uses. Recreate that shape on top of Tauri IPC so web/ stays
@@ -78,9 +82,12 @@ struct Host {
     petting: bool,
     drag: Option<Drag>,
     pending_delta: (f64, f64),
+    last_pointer: Option<(f64, f64)>,
     last_cursor: (i32, i32),
+    size_fixes: u32,
     key_events: u64,
     held: HashSet<u32>,
+    autostart: Mode,
     update: UpdateState,
     downloaded: Option<(Update, Vec<u8>)>,
 }
@@ -96,12 +103,18 @@ struct Settings {
     blush: bool,
     whiskers: bool,
     privacy: bool,
+    click_through: bool,
+    run_as_admin: bool,
     sleep_after: f64,
     tune: Value,
     scale: f64,
 }
 
 impl Host {
+    fn scale(&self) -> f64 {
+        self.store.get("catScale").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.3).unwrap_or(0.9)
+    }
+
     fn settings(&self) -> Settings {
         let text = |key: &str, fallback: &str| {
             self.store.get(key).and_then(Value::as_str).unwrap_or(fallback).to_string()
@@ -117,9 +130,11 @@ impl Host {
             blush: self.store.get("blush") == Some(&Value::Bool(true)),
             whiskers: self.store.get("whiskers") != Some(&Value::Bool(false)),
             privacy: self.store.get("privacy") == Some(&Value::Bool(true)),
+            click_through: self.store.get("clickThrough") == Some(&Value::Bool(true)),
+            run_as_admin: self.store.get("runAsAdmin") == Some(&Value::Bool(true)),
             sleep_after: number("sleepAfter").unwrap_or(60.0),
             tune: self.store.get("tune").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({})),
-            scale: number("catScale").filter(|v| *v > 0.3).unwrap_or(0.9),
+            scale: self.scale(),
             coat,
         }
     }
@@ -324,6 +339,7 @@ fn tick(app: &AppHandle) {
     };
     // The page works in CSS pixels; the pointer and the window are in physical pixels.
     let factor = panel.scale_factor().unwrap_or(1.0);
+    keep_size(app, &panel, factor);
     let cursor = (
         ((pointer.x - f64::from(origin.0)) / factor).round() as i32,
         ((pointer.y - f64::from(origin.1)) / factor).round() as i32,
@@ -331,6 +347,13 @@ fn tick(app: &AppHandle) {
     let mut calls = Vec::new();
     {
         let mut h = host(app);
+        // The hook reports no pointer moves, so the movement is the pointer's change between
+        // frames, in CSS pixels like the mac build's event deltas. It drives the mouse paw and
+        // the pointer speed that makes the cat curious.
+        if let Some(last) = h.last_pointer.replace((pointer.x, pointer.y)) {
+            h.pending_delta.0 += (pointer.x - last.0) / factor;
+            h.pending_delta.1 += (pointer.y - last.1) / factor;
+        }
         if cursor != h.last_cursor {
             h.last_cursor = cursor;
             calls.push(format!("cat.cursor({},{})", cursor.0, cursor.1));
@@ -343,6 +366,33 @@ fn tick(app: &AppHandle) {
     if !calls.is_empty() {
         js(app, &calls.join(";"));
     }
+}
+
+/// Holds the panel to the size picked in the menu. Users have seen it creep larger while the
+/// pointer moves over the cat or the cat is dragged, which makes the cat grow; log.txt notes
+/// the first few corrections so the cause can be traced.
+fn keep_size(app: &AppHandle, panel: &WebviewWindow, factor: f64) {
+    let Ok(actual) = panel.inner_size() else { return };
+    let want = window_size(host(app).scale());
+    let off = |have: u32, logical: f64| (f64::from(have) - (logical * factor).round()).abs() > 1.0;
+    if !off(actual.width, want.width) && !off(actual.height, want.height) {
+        return;
+    }
+    let fixes = {
+        let mut h = host(app);
+        h.size_fixes += 1;
+        h.size_fixes
+    };
+    if fixes <= 5 {
+        log(&format!(
+            "panel was {}x{}, restoring {}x{} (scale factor {factor})",
+            actual.width,
+            actual.height,
+            (want.width * factor).round(),
+            (want.height * factor).round()
+        ));
+    }
+    let _ = panel.set_size(want);
 }
 
 /// Feeds hook input and a ~60 fps tick to the main thread, where all the state lives. A tick is
@@ -427,8 +477,11 @@ fn on_input(app: &AppHandle, input: Input) {
 
 fn on_button(app: &AppHandle, button: Button, down: bool) {
     if down {
-        let hit = host(app).hit.clone();
-        if hit != "none" {
+        let (hit, click_through) = {
+            let h = host(app);
+            (h.hit.clone(), h.settings().click_through)
+        };
+        if hit != "none" && !click_through {
             if let Some((panel, pointer)) = pointer_in_panel(app) {
                 match button {
                     Button::Right => show_context_menu(app, &panel),
@@ -479,7 +532,19 @@ fn start_drag(app: &AppHandle, panel: &WebviewWindow, pointer: (f64, f64)) {
 fn stop_drag(app: &AppHandle) {
     let Some(drag) = host(app).drag.take() else { return };
     save_origin(app, drag.last);
-    let ignore = host(app).hit == "none";
+    update_click_target(app);
+}
+
+/// Only the cat itself takes clicks, and in click-through mode not even that: everything goes
+/// to the window underneath, and the menu is reached from the tray.
+fn update_click_target(app: &AppHandle) {
+    let ignore = {
+        let h = host(app);
+        if h.drag.is_some() {
+            return;
+        }
+        h.hit == "none" || h.settings().click_through
+    };
     if let Some(panel) = panel(app) {
         let _ = panel.set_ignore_cursor_events(ignore);
     }
@@ -498,14 +563,8 @@ fn host_message(app: AppHandle, webview: Webview, channel: String, message: Valu
 
 fn on_cat_message(app: &AppHandle, message: &Value) {
     if let Some(hit) = message.get("hit").and_then(Value::as_str) {
-        let ignore = {
-            let mut h = host(app);
-            h.hit = hit.to_string();
-            h.drag.is_none().then_some(hit == "none")
-        };
-        if let (Some(ignore), Some(panel)) = (ignore, panel(app)) {
-            let _ = panel.set_ignore_cursor_events(ignore);
-        }
+        host(app).hit = hit.to_string();
+        update_click_target(app);
     } else if let Some(ticks) = message.get("ticks").and_then(Value::as_f64) {
         write_status(app, ticks);
     }
@@ -591,9 +650,9 @@ fn update_item(app: &AppHandle) -> tauri::Result<Item> {
 }
 
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let (s, hook_ready) = {
+    let (s, hook_ready, autostart) = {
         let h = host(app);
-        (h.settings(), h.hook_ready)
+        (h.settings(), h.hook_ready, h.autostart)
     };
     let coat = s.coat.as_str();
     let mut items = vec![check(app, format!("set:style={}", json!(if s.style == "3d" { "2d" } else { "3d" })), "立体效果（3D）", s.style == "3d")?];
@@ -607,6 +666,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             ("蓝灰猫", json!("grey")),
             ("白猫", json!("white")),
             ("三花猫", json!("calico")),
+            ("暹罗猫", json!("siamese")),
+            ("布偶猫", json!("ragdoll")),
+            ("德文卷毛猫", json!("devon")),
+            ("美短银虎斑", json!("silver")),
+            ("狸花猫", json!("lihua")),
         ])?,
     )?);
     // Only coats whose stripes would show get the choice; black and white stay plain.
@@ -643,7 +707,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         toggle(app, "腮红", "blush", s.blush)?,
         toggle(app, "胡须", "whiskers", s.whiskers)?,
     ])?);
-    let sizes = [("小", 0.7), ("中", 0.9), ("大", 1.1), ("特大", 1.35)]
+    let sizes = [("特小", 0.5), ("小", 0.7), ("中", 0.9), ("大", 1.1), ("特大", 1.35)]
         .iter()
         .map(|(text, value)| check(app, format!("scale:{value}"), text, s.scale == *value))
         .collect::<tauri::Result<Vec<_>>>()?;
@@ -660,13 +724,16 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ])?,
     )?);
     items.push(toggle(app, "隐私模式（不显示键名）", "privacy", s.privacy)?);
+    items.push(toggle(app, "鼠标穿透（点击直接落到下层窗口）", "clickThrough", s.click_through)?);
     items.push(action(app, "settings", "调节反应…")?);
     items.push(separator(app)?);
-    items.push(if DEV {
-        note(app, "开机自启（开发模式不可用）")?
+    if DEV {
+        items.push(note(app, "开机自启（开发模式不可用）")?);
+        items.push(note(app, "以管理员身份运行（开发模式不可用）")?);
     } else {
-        check(app, "autostart".into(), "开机自启", autostart::enabled())?
-    });
+        items.push(check(app, "autostart".into(), "开机自启", autostart != Mode::Off)?);
+        items.push(check(app, "admin".into(), "以管理员身份运行（游戏里也有按键反馈）", s.run_as_admin)?);
+    }
     items.push(action(app, "home", "回到右下角")?);
     let visible = panel(app).and_then(|panel| panel.is_visible().ok()).unwrap_or(false);
     items.push(action(app, "visibility", if visible { "隐藏" } else { "显示" })?);
@@ -712,6 +779,7 @@ fn on_menu(app: &AppHandle, id: &str) {
         if let Ok(value) = serde_json::from_str::<Value>(raw) {
             host(app).store.set(key, value);
             push_options(app);
+            update_click_target(app);
         }
     } else if let Some(value) = id.strip_prefix("scale:").and_then(|raw| raw.parse::<f64>().ok()) {
         apply_scale(app, value, true);
@@ -719,10 +787,10 @@ fn on_menu(app: &AppHandle, id: &str) {
         match id {
             "settings" => open_settings(app),
             "autostart" => {
-                if let Err(error) = autostart::set(!autostart::enabled()) {
-                    log(&format!("autostart change failed: {error}"));
-                }
+                let on = host(app).autostart == Mode::Off;
+                set_autostart(app, if on { autostart_mode(app) } else { Mode::Off });
             }
+            "admin" => toggle_admin(app),
             "home" => {
                 {
                     let mut h = host(app);
@@ -744,6 +812,75 @@ fn on_menu(app: &AppHandle, id: &str) {
         }
     }
     rebuild_menu(app);
+}
+
+// MARK: Administrator mode
+
+/// How start at login has to work for the way KeyCat runs now.
+fn autostart_mode(app: &AppHandle) -> Mode {
+    if host(app).settings().run_as_admin && elevate::is_elevated() {
+        Mode::Task
+    } else {
+        Mode::RunKey
+    }
+}
+
+fn set_autostart(app: &AppHandle, mode: Mode) {
+    match autostart::set(mode) {
+        Ok(()) => host(app).autostart = mode,
+        Err(error) => log(&format!("autostart change to {mode:?} failed: {error}")),
+    }
+}
+
+/// Moves an enabled start at login over to the kind that matches the administrator setting.
+/// Without elevation the task can be neither made nor removed, so that waits for an elevated run.
+fn sync_autostart(app: &AppHandle) {
+    let current = host(app).autostart;
+    let want = autostart_mode(app);
+    if DEV || current == Mode::Off || current == want {
+        return;
+    }
+    if want == Mode::Task || elevate::is_elevated() {
+        set_autostart(app, want);
+    }
+}
+
+/// Turning it on restarts KeyCat elevated behind the UAC prompt; turning it off takes effect the
+/// next time KeyCat starts, since an elevated program cannot drop its rights.
+fn toggle_admin(app: &AppHandle) {
+    let on = !host(app).settings().run_as_admin;
+    host(app).store.set("runAsAdmin", json!(on));
+    if on && !elevate::is_elevated() {
+        match elevate::relaunch(&format!("--after {}", std::process::id())) {
+            Ok(()) => {
+                log("restarting as administrator");
+                return app.exit(0);
+            }
+            Err(error) => {
+                log(&format!("administrator restart declined: {error}"));
+                host(app).store.set("runAsAdmin", json!(false));
+            }
+        }
+    }
+    sync_autostart(app);
+}
+
+/// Before anything else starts: a restart waits for the copy that launched it to quit (or
+/// single-instance would close it), and with the administrator setting on, a normal start hands
+/// over to an elevated one. Returns false when this process should quit at once.
+fn prepare_launch() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pid) = args.iter().position(|arg| arg == "--after").and_then(|i| args.get(i + 1)?.parse().ok()) {
+        elevate::wait_for_exit(pid);
+        return true;
+    }
+    if DEV || elevate::is_elevated() {
+        return true;
+    }
+    let Some(dir) = std::env::var_os("APPDATA") else { return true };
+    let store = Store::open(PathBuf::from(dir).join(IDENTIFIER).join("settings.json"));
+    // Declined, KeyCat still runs, just without key presses from elevated windows.
+    store.get("runAsAdmin") != Some(&Value::Bool(true)) || elevate::relaunch("").is_err()
 }
 
 // MARK: Settings window
@@ -920,9 +1057,12 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         petting: false,
         drag: None,
         pending_delta: (0.0, 0.0),
+        last_pointer: None,
         last_cursor: (-9999, -9999),
+        size_fixes: 0,
         key_events: 0,
         held: HashSet::new(),
+        autostart: if DEV { Mode::Off } else { autostart::current() },
         update: UpdateState::Idle,
         downloaded: None,
     }));
@@ -936,11 +1076,15 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     // Built after the hook came up, so a failed hook shows in the menu.
     rebuild_menu(app);
     start_update_checks(app);
-    log(&format!("started v{}", app.package_info().version));
+    sync_autostart(app);
+    log(&format!("started v{} elevated={}", app.package_info().version, elevate::is_elevated()));
     Ok(())
 }
 
 fn main() {
+    if !prepare_launch() {
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(panel) = panel(app) {
