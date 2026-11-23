@@ -388,8 +388,20 @@
     arm.rim.scale.set(0.149, 0.097, 0.144);
   }
 
+  // Space bar easter egg: the tail sweeps out past the hip, round the side and in over the near
+  // edge of the board, and its tip pats the key. `tip` is the world point the tip should touch.
+  const reachPath = [V(), V(), V(), V(), V()];
+  function reachTail(root, tip) {
+    reachPath[0].set(root.x + 0.36, 0.3, root.z + 0.14);
+    reachPath[1].set(tip.x + 0.34, 0.31, mix(root.z, tip.z, 0.55));
+    reachPath[2].set(tip.x + 0.24, 0.33, tip.z - 0.06);
+    reachPath[3].set(tip.x + 0.11, mix(0.33, tip.y + 0.02, 0.5), tip.z + 0.02);
+    reachPath[4].copy(tip);
+  }
+
   // `thump` blends in the annoyed pose, `lift` (0..1) raises its far half, `lash` swings it sideways.
-  function updateTail(time, sway, sleep, thump = 0, lift = 0, lash = 0) {
+  // `reach` (0..1) blends in the space bar pat towards `reachTip`.
+  function updateTail(time, sway, sleep, thump = 0, lift = 0, lash = 0, reach = 0, reachTip = null) {
     body.updateMatrixWorld();
     for (let i = 0; i < tailPts.length; i++) {
       const w = i / (tailPts.length - 1);
@@ -406,6 +418,12 @@
       attach(local, attached);
       loose.copy(local).add(HOME).addScaledVector(body.position, 0.3).addScaledVector(HOME, -0.3);
       local.lerpVectors(attached, loose, K.smooth(0.1, 0.7, w));
+    }
+    if (reach > 0 && reachTip) {
+      const pts = tailCurve.points;
+      reachTail(pts[0], reachTip);
+      // The point next to the root only bends part of the way, so the tail leaves the body smoothly.
+      for (let i = 1; i < pts.length; i++) pts[i].lerp(reachPath[i - 1], reach * (i === 1 ? 0.6 : 1));
     }
     tail.update((t, out) => tailCurve.getPoint(t, out), t => mix(0.085, 0.068, t) + 0.014 * K.smooth(0.8, 1, t));
   }
