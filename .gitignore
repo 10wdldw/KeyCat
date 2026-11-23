@@ -10,3 +10,7 @@ snaps/
 ref/
 
 .DS_Store
+
+# Windows/Electron build
+win/node_modules/
+win/dist/
