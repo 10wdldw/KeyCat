@@ -11,6 +11,8 @@ ref/
 
 .DS_Store
 
-# Windows/Electron build
+# Windows build (Tauri)
 win/node_modules/
-win/dist/
+win/target/
+win/gen/
+win/out/
