@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds the universal app and packs dist/KeyCat-<version>.zip for a GitHub release.
+# Builds the universal app and packs dist/KeyCat.zip for a GitHub release.
+# The asset name stays fixed so github.com/.../releases/latest/download/KeyCat.zip keeps working.
 # Usage: sh tools/package.sh
 set -eu
 cd "$(dirname "$0")/.."
@@ -8,6 +9,6 @@ sh build.sh
 rm -rf dist
 mkdir -p dist
 # ditto keeps the bundle's symlinks and permission bits intact; zip(1) would flatten them.
-ditto -c -k --keepParent build/KeyCat.app "dist/KeyCat-$VERSION.zip"
-shasum -a 256 "dist/KeyCat-$VERSION.zip" | tee "dist/KeyCat-$VERSION.zip.sha256"
+ditto -c -k --keepParent build/KeyCat.app dist/KeyCat.zip
+shasum -a 256 dist/KeyCat.zip | tee "dist/KeyCat-$VERSION.zip.sha256"
 ls -lh dist

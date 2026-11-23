@@ -88,7 +88,7 @@ cd KeyCat
 打发布包：
 
 ```sh
-sh tools/package.sh   # 产物 dist/KeyCat-<version>.zip 及 SHA-256
+sh tools/package.sh   # 产物 dist/KeyCat.zip 及带版本号的 SHA-256
 ```
 
 ## 结构
