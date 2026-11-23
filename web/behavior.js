@@ -50,6 +50,9 @@
     R: { side: 1, pos: V(0.36, 0.26, 0.68), from: V(), key: null, t0: -100, dur: 0.08, down: false },
   };
   for (const p of Object.values(paws)) { p.spring = new Spring(p.pos, 3.2, 0.78); p.last = p.pos.clone(); }
+  // The tail presses the space bar: it swings over in `dur`, the key goes down when the tip lands
+  // (`landAt`), and the tail hovers there a while in case more spaces follow before curling back.
+  const tailTap = { key: null, t0: -100, dur: 0.18, from: 0, down: false, landAt: -100, reach: 0, hover: 0.12, tip: V() };
   const popups = [], zs = [];
   const tmp = V(0, 0, 0), tmp2 = V(0, 0, 0);
 
@@ -78,12 +81,25 @@
     const k = keyboard.resolve(code);
     if (!k) return;
     if (!down) {
+      if (tailTap.key === k) { tailTap.down = false; return; }
       k.down = false;
       for (const p of Object.values(paws)) if (p.key === k) p.down = false;
       return;
     }
     wake(t);
-    if (k.down) return;
+    if (k.down || (tailTap.key === k && tailTap.down)) return;
+    // Easter egg: space goes to the tail, unless the tail is busy thumping in a huff.
+    if (k.code === 'Space' && !S.cross) {
+      tailTap.from = tailTap.reach;
+      tailTap.dur = mix(0.18, 0.07, tailTap.reach);
+      tailTap.key = k;
+      tailTap.t0 = t;
+      tailTap.down = true;
+      // Not a paw key: the paws stay where they are rather than curling up to type.
+      S.strokes.push(t);
+      if (S.strokes.filter(s => t - s < 0.15).length >= TUNING.mashKeys) poke(0.3, t);
+      return;
+    }
     let side = keyboard.leftHand(code) ? 'R' : 'L';
     if (mousing(t)) side = 'R';
     const paw = paws[side];
@@ -103,7 +119,8 @@
     P.pitch.kick(0.9);
     // Modifier taps (caps lock / fn) send no key-up; let them spring back.
     if (code === 'CapsLock') setTimeout(() => key(code, false), 120);
-    if (!opts.privacy) popup(k, t, paw.side);
+    // F keys have no caps of their own and press the digit below; the label still names the F key.
+    if (!opts.privacy) popup(k, t, paw.side, /^F\d+$/.test(code) ? code : k.label);
   }
 
   const fxSprite = (kind, order) => {
@@ -133,9 +150,8 @@
   }
 
   // The label floats beside the striking arm, on its outer side, like the reference.
-  function popup(k, t, side) {
+  function popup(k, t, side, label = k.label) {
     for (let i = popups.length - 1; i >= 0; i--) if (popups[i].key === k) { scene.remove(popups[i].sprite); popups.splice(i, 1); }
-    const label = k.label === 'space' ? 'space' : k.label;
     const { tex, aspect } = K.labelTexture(label);
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
     sprite.renderOrder = 40;
@@ -144,6 +160,32 @@
     sprite.userData.aspect = aspect;
     scene.add(sprite);
     popups.push({ key: k, sprite, t0: t, upAt: null });
+  }
+
+  // The tail's reach is scripted like a paw strike so the tip lands on time; the key goes down and
+  // its label pops up only when the tip touches it.
+  function updateTailTap(t, dt) {
+    const k = tailTap.key;
+    if (!k) { tailTap.reach += (0 - tailTap.reach) * approach(10, dt); return; }
+    const age = t - tailTap.t0, swinging = age < tailTap.dur;
+    if (swinging) tailTap.reach = mix(tailTap.from, 1, smooth(0, 1, age / tailTap.dur));
+    else if (tailTap.landAt < tailTap.t0) {
+      tailTap.landAt = t;
+      // A tail pat is lighter than a paw strike: a small dip and nod.
+      P.squash.kick(0.15);
+      P.pitch.kick(0.4);
+      if (!opts.privacy) popup(k, t, 1);
+    }
+    const pressing = !swinging && (tailTap.down || t - tailTap.landAt < 0.09);
+    k.down = pressing;
+    // Up in an arc while swinging over, down onto the cap, then a little bounce back up.
+    let hover = 0.12;
+    if (swinging) hover = 0.12 + Math.sin(age / tailTap.dur * Math.PI) * 0.1 * (1 - tailTap.from);
+    else if (pressing) hover = 0;
+    tailTap.hover += (hover - tailTap.hover) * approach(swinging ? 60 : pressing ? 70 : 18, dt);
+    // Done hovering: let the reach ease off and the tail curl back to its usual place.
+    if (!pressing && !swinging && t - tailTap.landAt > 0.8) { tailTap.key = null; return; }
+    S.busyUntil = Math.max(S.busyUntil, t + 1);
   }
 
   // A strike is scripted (it has to land on time); every other paw move goes through the paw's
@@ -214,6 +256,7 @@
     mouseProp.update(dt, S.mouseDown);
     updatePaw('L', paws.L, t, dt);
     updatePaw('R', paws.R, t, dt);
+    updateTailTap(t, dt);
 
     // Excitement: how busy the last two seconds were.
     while (S.strokes.length && t - S.strokes[0] > 2) S.strokes.shift();
@@ -279,6 +322,8 @@
     // Curious: leans in a little towards what it is watching, chest up rather than loafed.
     hunch += 0.06 * curious;
     squash -= 0.04 * curious;
+    // Patting with the tail, the hips shift a touch towards it.
+    shift += 0.06 * smooth(0, 1, tailTap.reach);
     P.shift.step(shift, dt);
     P.hunch.step(hunch, dt);
     P.squash.step(squash, dt);
@@ -300,6 +345,7 @@
     let focus = null;
     const typing = Object.values(paws).find(p => p.key && p.down);
     if (typing && t - S.lastKey < 0.6) focus = screen(keyboard.keyTop(typing.key, tmp2), V());
+    else if (tailTap.key && t - tailTap.t0 < 0.6) focus = screen(tailTap.tip, V());
     else if (S.cursor) focus = V(S.cursor.x, S.cursor.y, 0);
     let lx = 0, ly = 0;
     if (focus) {
@@ -399,8 +445,11 @@
       if (!resting && S.cross && prev < slamAt && S.thumpPhase >= slamAt) slam(t);
     }
     S.thumpLift += (lift - S.thumpLift) * approach(40, dt);
-    cat.updateTail(S.tailPhase, (1 - S.sleep) * (1 + 0.6 * S.excite + flickTail + 1.5 * S.annoy) * (1 - cross) * (1 - 0.55 * curious), S.sleep,
-      cross, S.thumpLift, lash);
+    // The tip touches the right half of the space bar; the tail is about 0.075 thick there.
+    if (tailTap.key) keyboard.keyTop(tailTap.key, tailTap.tip).add(V(0.36, 0.075 + tailTap.hover, -0.02));
+    const reach = smooth(0, 1, tailTap.reach);
+    cat.updateTail(S.tailPhase, (1 - S.sleep) * (1 + 0.6 * S.excite + flickTail + 1.5 * S.annoy) * (1 - cross) * (1 - 0.55 * curious) * (1 - reach), S.sleep,
+      cross * (1 - reach), S.thumpLift, lash, reach, tailTap.tip);
 
     // The desk hops when the tail lands; the anger mark pulses on each thump.
     P.desk.step(0, dt);
@@ -552,6 +601,7 @@
       for (const k of ['shift', 'hunch', 'squash', 'yaw', 'roll', 'gazeX', 'gazeY', 'ears']) P[k].set(0);
       P.pitch.set(-0.28);
       for (const p of Object.values(paws)) { p.key = null; p.down = false; p.t0 = -100; }
+      Object.assign(tailTap, { key: null, t0: -100, down: false, landAt: -100, reach: 0, hover: 0.12 });
     },
     hitTest,
     state: S,
