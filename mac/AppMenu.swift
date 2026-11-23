@@ -83,7 +83,29 @@ extension AppDelegate {
             menu.addItem(item("授权后重新启动") { $0.relaunch() })
             menu.addItem(.separator())
         }
+        menu.addItem(updateItem())
+        menu.addItem(.separator())
         menu.addItem(item("退出 KeyCat") { _ in NSApp.terminate(nil) })
+    }
+
+    /// Same wording as the Windows tray. 重启 swaps the new app in on the way out (applicationWillTerminate).
+    private func updateItem() -> NSMenuItem {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        guard updater.enabled else { return note("v\(version)（不在「应用程序」文件夹里，不自动更新）") }
+        switch updater.state {
+        case .ready(let new): return item("重启并更新到 v\(new)") { $0.relaunch() }
+        case .downloading: return note("正在下载更新…")
+        case .checking: return note("正在检查更新…")
+        case .current: return note("已是最新版本 v\(version)")
+        case .failed: return item("检查更新失败，点击重试") { $0.updater.check() }
+        case .idle: return item("检查更新…") { $0.updater.check() }
+        }
+    }
+
+    private func note(_ title: String) -> NSMenuItem {
+        let i = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        i.isEnabled = false
+        return i
     }
 
     /// Radio-style submenu. Picking an option runs `pick` and pushes the new look to the page.
@@ -141,7 +163,9 @@ extension AppDelegate {
     func relaunch() {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", "sleep 0.5; open \"$0\"", Bundle.main.bundlePath]
+        // Wait for this process to exit; `open` on a running app only brings it forward.
+        task.arguments = ["-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.1; done; open \"$0\"",
+                          Bundle.main.bundlePath, String(ProcessInfo.processInfo.processIdentifier)]
         try? task.run()
         NSApp.terminate(nil)
     }

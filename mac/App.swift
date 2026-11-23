@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScri
     var keyEvents = 0
     let defaults = UserDefaults.standard
     lazy var settings = SettingsWindow(app: self)
+    lazy var updater = Updater(app: self)
 
     var scale: CGFloat {
         get { CGFloat(defaults.object(forKey: "catScale") as? Double ?? 0.9) }
@@ -108,6 +109,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKScri
         }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+        updater.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        updater.install()
     }
 
     func makeWebView() -> WebCatView {
