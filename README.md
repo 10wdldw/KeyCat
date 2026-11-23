@@ -83,14 +83,25 @@ npm start      # 本机调试（mac 上也能跑，方便先看效果）
 npm run dist   # 产物在 win/dist：KeyCat-Setup-<version>.exe 和 latest.yml
 ```
 
-发布新版本：改好 `win/package.json` 的 `version` 并提交，然后推 tag：
+### 发布新版本（mac 和 Windows 一起发）
 
-```sh
-git tag v1.0.1 && git push origin v1.0.1
-```
+mac 的一行安装命令下载最新 Release 里的 `KeyCat.zip`，Windows 的自动更新读最新 Release 里的
+`latest.yml`，两端共用同一个 Release。所以每个 Release 都要带齐两边的产物，否则另一端会下载失败。
 
-GitHub Actions（`.github/workflows/windows.yml`）会在 Windows 上构建安装包并发布到 Releases，
-同时上传自动更新需要的 `latest.yml`。tag 必须和 `win/package.json` 的 version 一致。
+1. 把 `win/package.json` 的 `version`（`cd win && npm version x.y.z --no-git-tag-version`）和
+   `Info.plist` 的 `CFBundleShortVersionString` 改成同一个版本号，`CFBundleVersion` 加 1，提交到 main。
+2. 打 mac 包、推 tag、创建 Release 并带上 mac 包：
+
+   ```sh
+   sh tools/package.sh
+   git tag vx.y.z && git push origin vx.y.z
+   gh release create vx.y.z --title "KeyCat x.y.z" --generate-notes \
+     dist/KeyCat.zip dist/KeyCat-x.y.z.zip.sha256
+   ```
+
+3. tag 推上去后，GitHub Actions（`.github/workflows/windows.yml`）在 Windows 上构建安装包，
+   几分钟后把 `KeyCat-Setup-x.y.z.exe`、`latest.yml` 和 blockmap 传到同一个 Release。
+   tag 必须和 `win/package.json` 的 version 一致，否则构建会失败。
 
 ## 使用
 

@@ -1,7 +1,7 @@
 {
   "name": "keycat-win",
   "productName": "KeyCat",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "KeyCat for Windows: a black cat living in the notification area",
   "author": "ElloboDK",
   "license": "MIT",
