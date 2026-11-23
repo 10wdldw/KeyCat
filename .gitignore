@@ -1,0 +1,12 @@
+# Build output and release artifacts
+build/
+dist/
+
+# Local code-signing identity: private key plus its password. Never commit.
+signing/
+
+# Screenshots and reference material from the paid app this is modelled on
+snaps/
+ref/
+
+.DS_Store
