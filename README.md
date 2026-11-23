@@ -14,15 +14,15 @@ macOS 13+，Apple 芯片和 Intel 都能跑，不联网，占用约 1 MB。Windo
 打开「终端」，粘贴执行：
 
 ```sh
-curl -L -o /tmp/KeyCat.zip https://github.com/ElloboDK/KeyCat/releases/latest/download/KeyCat.zip \
-  && unzip -qo /tmp/KeyCat.zip -d /Applications && open /Applications/KeyCat.app
+curl -L -o /tmp/KeyCat-macOS.zip https://github.com/ElloboDK/KeyCat/releases/latest/download/KeyCat-macOS.zip \
+  && unzip -qo /tmp/KeyCat-macOS.zip -d /Applications && open /Applications/KeyCat.app
 ```
 
 用终端下载的文件不带系统的「下载隔离」标记，装完就能双击打开，不会有任何安全提示。
 
 ### 手动安装
 
-1. 从 [Releases](https://github.com/ElloboDK/KeyCat/releases/latest) 下载 `KeyCat.zip` 并解压。
+1. 从 [Releases](https://github.com/ElloboDK/KeyCat/releases/latest) 下载 `KeyCat-macOS.zip` 并解压。
 2. 把 `KeyCat.app` 拖进「应用程序」文件夹。
 3. 第一次打开会被系统拦下，因为应用没有经过 Apple 公证。在弹窗里点「完成」，然后打开
    **系统设置 → 隐私与安全性**，滚到「安全性」一栏，点「仍要打开」，输入密码确认。
@@ -52,7 +52,7 @@ Windows 版把同一套 three.js 场景装进 Electron 外壳（`win/`），住�
 
 ### 安装
 
-从 [Releases](https://github.com/ElloboDK/KeyCat/releases/latest) 下载 `KeyCat-Setup-x.y.z.exe` 并运行。
+从 [Releases](https://github.com/ElloboDK/KeyCat/releases/latest) 下载 `KeyCat-Windows-Setup.exe` 并运行。
 安装包没有签名，SmartScreen 可能提示「Windows 已保护你的电脑」：点「更多信息 → 仍要运行」。
 安装到当前用户目录，不需要管理员权限。
 
@@ -80,13 +80,24 @@ Windows 版把同一套 three.js 场景装进 Electron 外壳（`win/`），住�
 cd win
 npm ci
 npm start      # 本机调试（mac 上也能跑，方便先看效果）
-npm run dist   # 产物在 win/dist：KeyCat-Setup-<version>.exe 和 latest.yml
+npm run dist   # 产物在 win/dist：KeyCat-Windows-Setup.exe 和 latest.yml
 ```
 
 ### 发布新版本（mac 和 Windows 一起发）
 
-mac 的一行安装命令下载最新 Release 里的 `KeyCat.zip`，Windows 的自动更新读最新 Release 里的
-`latest.yml`，两端共用同一个 Release。所以每个 Release 都要带齐两边的产物，否则另一端会下载失败。
+每个 Release 里的文件：
+
+| 文件 | 平台 | 用途 |
+| --- | --- | --- |
+| `KeyCat-macOS.zip` | macOS | 解压得到 `KeyCat.app` |
+| `KeyCat-macOS.zip.sha256` | macOS | 校验：`shasum -c KeyCat-macOS.zip.sha256` |
+| `KeyCat-Windows-Setup.exe` | Windows | 安装包 |
+| `KeyCat-Windows-Setup.exe.blockmap` | Windows | 自动更新做增量下载用 |
+| `latest.yml` | Windows | 自动更新读取的版本清单，文件名由 electron-updater 固定，不能改 |
+
+文件名不带版本号（版本号看 Release 标题），这样 `releases/latest/download/<文件名>` 总是指向最新版。
+mac 的一行安装命令和 Windows 的自动更新都读最新的 Release，所以每个 Release 都要带齐两边的产物，
+否则另一端会下载失败。
 
 1. 把 `win/package.json` 的 `version`（`cd win && npm version x.y.z --no-git-tag-version`）和
    `Info.plist` 的 `CFBundleShortVersionString` 改成同一个版本号，`CFBundleVersion` 加 1，提交到 main。
@@ -96,11 +107,11 @@ mac 的一行安装命令下载最新 Release 里的 `KeyCat.zip`，Windows 的�
    sh tools/package.sh
    git tag vx.y.z && git push origin vx.y.z
    gh release create vx.y.z --title "KeyCat x.y.z" --generate-notes \
-     dist/KeyCat.zip dist/KeyCat-x.y.z.zip.sha256
+     dist/KeyCat-macOS.zip dist/KeyCat-macOS.zip.sha256
    ```
 
 3. tag 推上去后，GitHub Actions（`.github/workflows/windows.yml`）在 Windows 上构建安装包，
-   几分钟后把 `KeyCat-Setup-x.y.z.exe`、`latest.yml` 和 blockmap 传到同一个 Release。
+   几分钟后把 `KeyCat-Windows-Setup.exe`、blockmap 和 `latest.yml` 传到同一个 Release。
    tag 必须和 `win/package.json` 的 version 一致，否则构建会失败。
 
 ## 使用
@@ -147,7 +158,7 @@ cd KeyCat
 打发布包：
 
 ```sh
-sh tools/package.sh   # 产物 dist/KeyCat.zip 及带版本号的 SHA-256
+sh tools/package.sh   # 产物 dist/KeyCat-macOS.zip 及 KeyCat-macOS.zip.sha256
 ```
 
 ## 结构
