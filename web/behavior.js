@@ -523,7 +523,6 @@
   let last = now(), nextFrame = 0, previousRate = 0;
   function loop() {
     requestAnimationFrame(loop);
-    S.ticks = (S.ticks || 0) + 1;
     if (frozen !== null) return;
     const t = now();
     const configuredFps = TUNING.maxFps;
@@ -542,6 +541,7 @@
     last = t;
     update(t, dt);
     renderer.render(scene, camera);
+    S.ticks = (S.ticks || 0) + 1;
     if (window.keyCatLinuxInputRegion) {
       window.keyCatLinuxInputRegion(renderer.domElement);
     } else if (S.cursor) {

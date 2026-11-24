@@ -28,6 +28,8 @@ const TUNING_SCHEMA = [
       hint: '鼠标停下后，还要盯这么久才放松。' },
   ] },
   { group: '画面', items: [
+    { key: 'showOutline', label: '显示轮廓描边', type: 'toggle', def: true,
+      hint: '控制猫咪身体外沿的描边。黑猫的描边是白色。' },
     { key: 'maxFps', label: '最高帧率', type: 'range', min: 20, max: 120, step: 5, def: 120, unit: 'FPS',
       hint: '限制互动时的渲染帧率。空闲时最多绘制约 20 帧/秒。' },
   ] },

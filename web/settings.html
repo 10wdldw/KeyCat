@@ -86,6 +86,8 @@ function render() {
         hint.textContent = it.hint;
         row.append(hint);
       }
+      input.id = it.key;
+      label.htmlFor = input.id;
       inputs[it.key] = { it, input, row };
       card.append(row);
     }

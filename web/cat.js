@@ -475,7 +475,7 @@
   // `wave` colour, and `ears` scales the ears. `shade` is the soft volume shading; black stays a
   // flat silhouette like the reference.
   const COATS = {
-    black: { fur: '#151515', ink: '#151515', rim: '#f6f3e8', arm: '#8a8984', paw: '#f7f6f0', toe: '#b9b7ae', whisker: '#dedcd4', eye: 'gold' },
+    black: { fur: '#151515', ink: '#151515', rim: '#f6f3e8', arm: '#8a8984', paw: '#151515', pawRim: '#212121', toe: '#414141', whisker: '#dedcd4', eye: 'gold' },
     tuxedo: { fur: '#1a1a1a', ink: '#151515', lid: '#e4c25a', rim: '#f6f3e8', arm: '#8a8984', paw: '#f8f7f2', toe: '#bcbab2', whisker: '#e8e6de', eye: 'green',
       light: '#f8f7f2', muzzle: 1, tuxedo: 1, nose: '#e7a0a0', mouth: '#9a8f88', inner: '#3a2e2e', innerAmt: 1, shade: 0.25 },
     orange: { fur: '#eda25a', ink: '#b8712f', lid: '#8a4a1f', rim: '#fff8ea', arm: '#b8712f', paw: '#fff6e8', toe: '#e0b991', whisker: '#fffaf0', eye: 'green',
@@ -534,6 +534,8 @@
     chinLine.visible = !solid;
     chinMat.uniforms.uColor.value.set(c.ink || c.arm);
     rimMat.color.set(c.rim);
+    rimMat.visible = TUNING.showOutline !== false;
+    pawRimMat.color.set(c.pawRim || '#8f8f8a');
     armRimMat.color.set(c.arm);
     pawMat.color.set(c.paw);
     toeMat.color.set(c.toe);
