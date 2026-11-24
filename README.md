@@ -6,7 +6,17 @@ KeyCat 是一只会回应键鼠的桌面猫。你打字，它伸爪按键。你�
 
 本仓库维护 KeyCat 的 Linux 版，已经在 Ubuntu 上构建和试用。黑猫使用黑色爪子，耳根轮廓平滑接入脸颊，描边和帧率都可以在托盘里调整。
 
-## 在 Ubuntu 上运行
+## 在 Ubuntu 上安装
+
+**Ubuntu 26.04 LTS · x86-64**。从 [Linux 发布页](https://github.com/10wdldw/KeyCat/releases/tag/linux-v1.0.4-1) 下载 [DEB 安装包](https://github.com/10wdldw/KeyCat/releases/download/linux-v1.0.4-1/keycat_1.0.4-1_amd64.deb)，在下载目录执行下列命令。APT 会处理软件依赖，安装后可在应用菜单搜索 KeyCat。
+
+```sh
+sudo apt install ./keycat_1.0.4-1_amd64.deb
+```
+
+卸载时运行 `sudo apt remove keycat`。其他 Ubuntu 版本可以尝试下面的源码构建方式。
+
+### 从源码构建
 
 装好 Rust 后，克隆本仓库并编译。
 
@@ -51,6 +61,7 @@ cargo build --locked --release
 
 - `web/` 保存 three.js 场景、猫咪模型和共用设置。可在仓库根目录运行 `python3 tools/serve.py`，然后打开 `http://127.0.0.1:8765` 预览。
 - `win/` 是 Linux 和 Windows 共用的 Tauri 外壳。在该目录运行 `cargo test --locked` 可执行 Rust 测试。
+- `packaging/deb/build.sh` 在构建时解析系统库依赖并生成 `dist/*.deb`，需要 `dpkg-dev` 和 Python 3。
 - `mac/` 保存上游的 Swift 外壳。Windows 和 macOS 官方安装包及构建发布说明见 [上游 KeyCat](https://github.com/ElloboDK/KeyCat)。
 
 原项目由 [ElloboDK](https://github.com/ElloboDK) 创建。沿用上游关于个人使用和交流的说明。three.js 的许可证见 [THREE_LICENSE](web/THREE_LICENSE)。

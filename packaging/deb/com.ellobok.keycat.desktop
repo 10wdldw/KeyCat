@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=KeyCat
+Comment=A desktop cat that reacts to the keyboard and mouse
+Comment[zh_CN]=会对键鼠动作做出反应的桌面猫
+Exec=/usr/bin/keycat
+Icon=com.ellobok.keycat
+Terminal=false
+Categories=Utility;
+StartupWMClass=Keycat
