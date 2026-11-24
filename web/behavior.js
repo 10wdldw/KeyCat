@@ -520,24 +520,36 @@
     return 'none';
   }
 
-  let last = now(), frame = 0;
+  let last = now(), nextFrame = 0, previousRate = 0;
   function loop() {
     requestAnimationFrame(loop);
     S.ticks = (S.ticks || 0) + 1;
     if (frozen !== null) return;
     const t = now();
+    const configuredFps = TUNING.maxFps;
+    const maxFps = Number.isFinite(configuredFps) && configuredFps >= 20 && configuredFps <= 120
+      ? configuredFps : 120;
+    const rate = t < S.busyUntil ? maxFps : 20;
+    const interval = 1 / rate;
+    if (rate !== previousRate) {
+      nextFrame = last + interval;
+      previousRate = rate;
+    }
+    if (t + 0.0005 < nextFrame) return;
     const dt = Math.min(0.1, t - last);
-    const busy = t < S.busyUntil;
-    // When nothing is happening, draw ~20 fps: enough for breathing and eye tracking.
-    if (!busy && ++frame % 3 !== 0) return;
+    // Carry timing error across refresh ticks, but skip missed frames after a stall.
+    nextFrame += Math.max(1, Math.floor((t - nextFrame) / interval) + 1) * interval;
     last = t;
     update(t, dt);
     renderer.render(scene, camera);
-    if (S.cursor) {
+    if (window.keyCatLinuxInputRegion) {
+      window.keyCatLinuxInputRegion(renderer.domElement);
+    } else if (S.cursor) {
       const hit = hitTest(S.cursor.x, S.cursor.y);
       if (hit !== S.hit) {
         S.hit = hit;
-        window.webkit?.messageHandlers?.cat?.postMessage({ hit });
+        const host = window.keyCatHost?.cat ?? window.webkit?.messageHandlers?.cat;
+        host?.postMessage({ hit });
       }
     }
   }

@@ -27,6 +27,10 @@ const TUNING_SCHEMA = [
     { key: 'curiousHold', label: '好奇持续多久', type: 'range', min: 0.5, max: 6, step: 0.5, def: 2, unit: '秒',
       hint: '鼠标停下后，还要盯这么久才放松。' },
   ] },
+  { group: '画面', items: [
+    { key: 'maxFps', label: '最高帧率', type: 'range', min: 20, max: 120, step: 5, def: 120, unit: 'FPS',
+      hint: '限制互动时的渲染帧率。空闲时最多绘制约 20 帧/秒。' },
+  ] },
 ];
 const TUNING = {};
 for (const g of TUNING_SCHEMA) for (const it of g.items) TUNING[it.key] = it.def;

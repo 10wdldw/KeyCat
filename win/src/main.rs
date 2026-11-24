@@ -1,14 +1,12 @@
-// The Windows host for the web scene in ../web. Mirrors the mac build's mac/App.swift and
-// mac/AppMenu.swift: a transparent, click-through floating window reports the pointer to the page,
-// forwards global keyboard and mouse input, and offers the same tray menu. The page is drawn by
-// the system WebView2, so the app ships no browser of its own. tauri-plugin-updater handles updates.
+// Tauri host for the web scene in ../web. The floating window forwards global input to the
+// scene and offers the same tray menu as the mac build. Rendering uses the system webview.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(windows)]
 mod autostart;
+#[cfg(windows)]
 mod elevate;
-#[cfg_attr(not(windows), allow(dead_code))]
 mod hook;
-#[cfg_attr(not(windows), allow(dead_code))]
 mod keymap;
 mod store;
 
@@ -31,8 +29,10 @@ use tauri::{
     AppHandle, LogicalSize, Manager, PhysicalPosition, RunEvent, Webview, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, Wry,
 };
+#[cfg(windows)]
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+#[cfg(windows)]
 use autostart::Mode;
 use hook::{Button, Input};
 use store::Store;
@@ -41,23 +41,26 @@ const DESIGN: (f64, f64) = (360.0, 368.0); // mac/App.swift designSize at scale 
 const PANEL: &str = "panel";
 const SETTINGS: &str = "settings";
 const TRAY: &str = "tray";
+#[cfg(windows)]
 const DEV: bool = cfg!(debug_assertions);
 /// tauri.conf.json `identifier`, which names the app data folder in %APPDATA%.
+#[cfg(windows)]
 const IDENTIFIER: &str = "com.ellobok.keycat";
 
-// The web scene talks to its host through `window.webkit.messageHandlers.<name>.postMessage`,
-// the WKWebView bridge the mac build uses. Recreate that shape on top of Tauri IPC so web/ stays
-// untouched. Right-clicks belong to the tray-style menu, not WebView2's own.
+// Keep WebKitGTK's native message handlers intact for Tauri IPC.
 const BRIDGE: &str = r#"(() => {
   const handler = channel => ({
     postMessage: message => window.__TAURI_INTERNALS__.invoke('host_message', { channel, message }).catch(() => {}),
   });
-  window.webkit = { messageHandlers: { cat: handler('cat'), settings: handler('settings') } };
+  window.keyCatHost = { cat: handler('cat'), settings: handler('settings') };
   window.addEventListener('contextmenu', event => event.preventDefault());
 })();"#;
+#[cfg(target_os = "linux")]
+const LINUX_PANEL_BRIDGE: &str = include_str!("linux_panel.js");
 
 // MARK: State
 
+#[cfg(windows)]
 #[derive(Clone, PartialEq)]
 enum UpdateState {
     Idle,
@@ -77,18 +80,27 @@ struct Drag {
 struct Host {
     store: Store,
     page_ready: bool,
+    panel_visible: bool,
     hook_ready: bool,
+    #[cfg(not(target_os = "linux"))]
     hit: String,
+    #[cfg(target_os = "linux")]
+    input_rectangles: Vec<gtk::cairo::RectangleInt>,
     petting: bool,
     drag: Option<Drag>,
     pending_delta: (f64, f64),
+    #[cfg(not(target_os = "linux"))]
     last_pointer: Option<(f64, f64)>,
     last_cursor: (i32, i32),
+    #[cfg(not(target_os = "linux"))]
     size_fixes: u32,
     key_events: u64,
     held: HashSet<u32>,
+    #[cfg(windows)]
     autostart: Mode,
+    #[cfg(windows)]
     update: UpdateState,
+    #[cfg(windows)]
     downloaded: Option<(Update, Vec<u8>)>,
 }
 
@@ -104,6 +116,7 @@ struct Settings {
     whiskers: bool,
     privacy: bool,
     click_through: bool,
+    #[cfg(windows)]
     run_as_admin: bool,
     sleep_after: f64,
     tune: Value,
@@ -131,6 +144,7 @@ impl Host {
             whiskers: self.store.get("whiskers") != Some(&Value::Bool(false)),
             privacy: self.store.get("privacy") == Some(&Value::Bool(true)),
             click_through: self.store.get("clickThrough") == Some(&Value::Bool(true)),
+            #[cfg(windows)]
             run_as_admin: self.store.get("runAsAdmin") == Some(&Value::Bool(true)),
             sleep_after: number("sleepAfter").unwrap_or(60.0),
             tune: self.store.get("tune").filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({})),
@@ -231,6 +245,59 @@ fn window_size(scale: f64) -> LogicalSize<f64> {
     LogicalSize::new((DESIGN.0 * scale).round(), (DESIGN.1 * scale).round())
 }
 
+fn panel_origin(panel: &WebviewWindow) -> tauri::Result<PhysicalPosition<i32>> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::{GtkWindowExt, WidgetExt};
+        let window = panel.gtk_window()?;
+        let (x, y) = window.window().map(|surface| surface.root_origin())
+            .unwrap_or_else(|| window.position());
+        let factor = window.scale_factor();
+        Ok(PhysicalPosition::new(x * factor, y * factor))
+    }
+    #[cfg(not(target_os = "linux"))]
+    panel.outer_position()
+}
+
+fn resize_panel(panel: &WebviewWindow, size: LogicalSize<f64>) -> tauri::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::{GtkWindowExt, WidgetExt};
+        let window = panel.gtk_window()?;
+        let (width, height) = (size.width as i32, size.height as i32);
+        // GTK uses the startup size as a minimum for a non-resizable window.
+        window.set_default_size(width, height);
+        window.set_size_request(width, height);
+        window.resize(width, height);
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    panel.set_size(size)
+}
+
+#[cfg(target_os = "linux")]
+fn fit_panel_origin(app: &AppHandle, origin: PhysicalPosition<i32>, size: LogicalSize<f64>) -> PhysicalPosition<i32> {
+    let monitor = app.available_monitors().unwrap_or_default().into_iter()
+        .find(|monitor| {
+            let (pos, extent) = (monitor.position(), monitor.size());
+            let x = i64::from(origin.x) - i64::from(pos.x);
+            let y = i64::from(origin.y) - i64::from(pos.y);
+            (0..i64::from(extent.width)).contains(&x) && (0..i64::from(extent.height)).contains(&y)
+        })
+        .or_else(|| app.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else { return origin };
+    let area = monitor.work_area();
+    let factor = monitor.scale_factor();
+    let fit = |point: i32, start: i32, length: u32, panel_size: f64| {
+        let available = (i64::from(length) - (panel_size * factor).round() as i64).max(0);
+        i64::from(point).clamp(i64::from(start), i64::from(start) + available) as i32
+    };
+    PhysicalPosition::new(
+        fit(origin.x, area.position.x, area.size.width, size.width),
+        fit(origin.y, area.position.y, area.size.height, size.height),
+    )
+}
+
 fn saved_origin(app: &AppHandle) -> Option<PhysicalPosition<i32>> {
     let (x, y) = {
         let h = host(app);
@@ -270,19 +337,33 @@ fn apply_scale(app: &AppHandle, value: f64, keep_origin: bool) {
     let Some(panel) = panel(app) else { return };
     let size = window_size(scale);
     let origin = match keep_origin {
-        true => panel.outer_position().ok(),
+        true => panel_origin(&panel).ok(),
         false => None,
     }
     .or_else(|| saved_origin(app))
     .unwrap_or_else(|| default_origin(app, size));
-    let _ = panel.set_size(size);
+    #[cfg(target_os = "linux")]
+    let origin = fit_panel_origin(app, origin, size);
+    if let Err(error) = resize_panel(&panel, size) {
+        log(&format!("panel resize failed: {error}"));
+    }
     let _ = panel.set_position(origin);
+}
+
+fn set_panel_visibility(app: &AppHandle, panel: &WebviewWindow, visible: bool) -> tauri::Result<()> {
+    if visible {
+        panel.show()?;
+    } else {
+        panel.hide()?;
+    }
+    host(app).panel_visible = visible;
+    Ok(())
 }
 
 fn create_panel(app: &AppHandle) -> tauri::Result<()> {
     let scale = host(app).settings().scale;
     let size = window_size(scale);
-    let panel = WebviewWindowBuilder::new(app, PANEL, WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, PANEL, WebviewUrl::App("index.html".into()))
         .title("KeyCat")
         .inner_size(size.width, size.height)
         .visible(false)
@@ -297,17 +378,24 @@ fn create_panel(app: &AppHandle) -> tauri::Result<()> {
         .focused(false)
         .focusable(false)
         .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
-        .initialization_script(BRIDGE)
+        .initialization_script(BRIDGE);
+    #[cfg(target_os = "linux")]
+    let builder = builder.initialization_script(LINUX_PANEL_BRIDGE);
+    let panel = builder
         .on_page_load(|window, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 on_page_ready(window.app_handle());
             }
         })
         .build()?;
+    #[cfg(target_os = "linux")]
+    resize_panel(&panel, size)?;
     let origin = saved_origin(app).unwrap_or_else(|| default_origin(app, size));
+    #[cfg(target_os = "linux")]
+    let origin = fit_panel_origin(app, origin, size);
     panel.set_position(origin)?;
-    panel.set_ignore_cursor_events(true)?;
-    panel.show()?;
+    set_panel_click_through(&panel, true)?;
+    set_panel_visibility(app, &panel, true)?;
     log("panel created");
     Ok(())
 }
@@ -320,25 +408,15 @@ fn tick(app: &AppHandle) {
         return;
     }
     let Ok(pointer) = app.cursor_position() else { return };
-    let dragged = host(app).drag.as_mut().map(|drag| {
-        drag.last = (
-            drag.origin.0 + (pointer.x - drag.cursor.0).round() as i32,
-            drag.origin.1 + (pointer.y - drag.cursor.1).round() as i32,
-        );
-        drag.last
-    });
-    let origin = match dragged {
-        Some(origin) => {
-            let _ = panel.set_position(PhysicalPosition::new(origin.0, origin.1));
-            origin
-        }
-        None => match panel.outer_position() {
-            Ok(pos) => (pos.x, pos.y),
-            Err(_) => return,
-        },
-    };
+    let origin = || panel_origin(&panel).ok().map(|pos| (pos.x, pos.y));
+    #[cfg(not(target_os = "linux"))]
+    let current_origin = move_drag(app, &panel, (pointer.x, pointer.y)).or_else(origin);
+    #[cfg(target_os = "linux")]
+    let current_origin = origin();
+    let Some(origin) = current_origin else { return };
     // The page works in CSS pixels; the pointer and the window are in physical pixels.
     let factor = panel.scale_factor().unwrap_or(1.0);
+    #[cfg(not(target_os = "linux"))]
     keep_size(app, &panel, factor);
     let cursor = (
         ((pointer.x - f64::from(origin.0)) / factor).round() as i32,
@@ -350,9 +428,17 @@ fn tick(app: &AppHandle) {
         // The hook reports no pointer moves, so the movement is the pointer's change between
         // frames, in CSS pixels like the mac build's event deltas. It drives the mouse paw and
         // the pointer speed that makes the cat curious.
+        #[cfg(not(target_os = "linux"))]
         if let Some(last) = h.last_pointer.replace((pointer.x, pointer.y)) {
             h.pending_delta.0 += (pointer.x - last.0) / factor;
             h.pending_delta.1 += (pointer.y - last.1) / factor;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // XWayland's absolute pointer can lag while a native Wayland window has focus.
+            let (dx, dy) = hook::take_motion();
+            h.pending_delta.0 += f64::from(dx) / factor;
+            h.pending_delta.1 += f64::from(dy) / factor;
         }
         if cursor != h.last_cursor {
             h.last_cursor = cursor;
@@ -371,6 +457,7 @@ fn tick(app: &AppHandle) {
 /// Holds the panel to the size picked in the menu. Users have seen it creep larger while the
 /// pointer moves over the cat or the cat is dragged, which makes the cat grow; log.txt notes
 /// the first few corrections so the cause can be traced.
+#[cfg(not(target_os = "linux"))]
 fn keep_size(app: &AppHandle, panel: &WebviewWindow, factor: f64) {
     let Ok(actual) = panel.inner_size() else { return };
     let want = window_size(host(app).scale());
@@ -440,6 +527,7 @@ fn start_pump(app: &AppHandle) {
 
 // MARK: Input
 
+#[cfg(not(target_os = "linux"))]
 fn pointer_in_panel(app: &AppHandle) -> Option<(WebviewWindow, (f64, f64))> {
     let panel = panel(app)?;
     let pointer = app.cursor_position().ok()?;
@@ -476,6 +564,9 @@ fn on_input(app: &AppHandle, input: Input) {
 }
 
 fn on_button(app: &AppHandle, button: Button, down: bool) {
+    #[cfg(target_os = "linux")]
+    let _ = button;
+    #[cfg(not(target_os = "linux"))]
     if down {
         let (hit, click_through) = {
             let h = host(app);
@@ -491,7 +582,9 @@ fn on_button(app: &AppHandle, button: Button, down: bool) {
                 }
             }
         }
-    } else {
+    }
+    #[cfg(not(target_os = "linux"))]
+    if !down && button == Button::Left {
         stop_pet(app);
         stop_drag(app);
     }
@@ -506,7 +599,7 @@ fn start_pet(app: &AppHandle, panel: &WebviewWindow, pointer: (f64, f64)) {
         }
         h.petting = true;
     }
-    let left = panel.outer_position().map(|pos| f64::from(pos.x)).unwrap_or(0.0);
+    let left = panel_origin(panel).map(|pos| f64::from(pos.x)).unwrap_or(0.0);
     let factor = panel.scale_factor().unwrap_or(1.0);
     js(app, &format!("cat.pet(true, {})", ((pointer.0 - left) / factor).round()));
 }
@@ -518,7 +611,7 @@ fn stop_pet(app: &AppHandle) {
 }
 
 fn start_drag(app: &AppHandle, panel: &WebviewWindow, pointer: (f64, f64)) {
-    let Ok(pos) = panel.outer_position() else { return };
+    let Ok(pos) = panel_origin(panel) else { return };
     {
         let mut h = host(app);
         if h.drag.is_some() {
@@ -526,7 +619,21 @@ fn start_drag(app: &AppHandle, panel: &WebviewWindow, pointer: (f64, f64)) {
         }
         h.drag = Some(Drag { cursor: pointer, origin: (pos.x, pos.y), last: (pos.x, pos.y) });
     }
-    let _ = panel.set_ignore_cursor_events(false);
+    let _ = set_panel_click_through(panel, false);
+}
+
+fn move_drag(app: &AppHandle, panel: &WebviewWindow, pointer: (f64, f64)) -> Option<(i32, i32)> {
+    let (x, y) = {
+        let mut h = host(app);
+        let drag = h.drag.as_mut()?;
+        drag.last = (
+            drag.origin.0 + (pointer.0 - drag.cursor.0).round() as i32,
+            drag.origin.1 + (pointer.1 - drag.cursor.1).round() as i32,
+        );
+        drag.last
+    };
+    let _ = panel.set_position(PhysicalPosition::new(x, y));
+    Some((x, y))
 }
 
 fn stop_drag(app: &AppHandle) {
@@ -535,8 +642,23 @@ fn stop_drag(app: &AppHandle) {
     update_click_target(app);
 }
 
+fn set_panel_click_through(panel: &WebviewWindow, ignore: bool) -> tauri::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::WidgetExt;
+        let window = panel.gtk_window()?;
+        let shape = ignore.then(gtk::cairo::Region::create);
+        // GtkWidget retains the shape before the window is realized and when it is hidden.
+        window.input_shape_combine_region(shape.as_ref());
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    panel.set_ignore_cursor_events(ignore)
+}
+
 /// Only the cat itself takes clicks, and in click-through mode not even that: everything goes
 /// to the window underneath, and the menu is reached from the tray.
+#[cfg(not(target_os = "linux"))]
 fn update_click_target(app: &AppHandle) {
     let ignore = {
         let h = host(app);
@@ -546,8 +668,27 @@ fn update_click_target(app: &AppHandle) {
         h.hit == "none" || h.settings().click_through
     };
     if let Some(panel) = panel(app) {
-        let _ = panel.set_ignore_cursor_events(ignore);
+        let _ = set_panel_click_through(&panel, ignore);
     }
+}
+
+#[cfg(target_os = "linux")]
+fn update_click_target(app: &AppHandle) {
+    use gtk::{cairo::Region, prelude::WidgetExt};
+    let Some(panel) = panel(app) else { return };
+    let Ok(window) = panel.gtk_window() else { return };
+    let shape = {
+        let h = host(app);
+        if h.drag.is_some() {
+            return;
+        }
+        if h.settings().click_through {
+            Region::create()
+        } else {
+            Region::create_rectangles(&h.input_rectangles)
+        }
+    };
+    window.input_shape_combine_region(Some(&shape));
 }
 
 // MARK: Bridge
@@ -556,17 +697,60 @@ fn update_click_target(app: &AppHandle) {
 fn host_message(app: AppHandle, webview: Webview, channel: String, message: Value) {
     match (webview.label(), channel.as_str()) {
         (PANEL, "cat") => on_cat_message(&app, &message),
+        #[cfg(target_os = "linux")]
+        (PANEL, "linuxPanel") => on_linux_panel_message(&app, message),
         (SETTINGS, "settings") => on_settings_message(&app, &message),
         _ => {}
     }
 }
 
 fn on_cat_message(app: &AppHandle, message: &Value) {
+    #[cfg(not(target_os = "linux"))]
     if let Some(hit) = message.get("hit").and_then(Value::as_str) {
         host(app).hit = hit.to_string();
         update_click_target(app);
-    } else if let Some(ticks) = message.get("ticks").and_then(Value::as_f64) {
-        write_status(app, ticks);
+        return;
+    }
+    if let Some(ticks) = message.get("ticks").and_then(Value::as_f64) {
+        let pointer_active = message.get("pointerActive").and_then(Value::as_bool).unwrap_or(false);
+        write_status(app, ticks, pointer_active);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn on_linux_panel_message(app: &AppHandle, mut message: Value) {
+    if let Some(rectangles) = message.as_object_mut().and_then(|value| value.remove("rectangles")) {
+        use gtk::cairo::RectangleInt;
+        if let Ok(rectangles) = serde_json::from_value::<Vec<[i32; 4]>>(rectangles) {
+            host(app).input_rectangles = rectangles.into_iter()
+                .map(|[x, y, width, height]| RectangleInt::new(x, y, width, height))
+                .collect();
+            update_click_target(app);
+        }
+        return;
+    }
+    let Some(panel) = panel(app) else { return };
+    let factor = panel.scale_factor().unwrap_or(1.0);
+    let pointer = message.get("screenX").and_then(Value::as_f64)
+        .zip(message.get("screenY").and_then(Value::as_f64))
+        .map(|(x, y)| (x * factor, y * factor));
+    let action = message.get("action").and_then(Value::as_str).unwrap_or_default();
+    if matches!(action, "pet" | "drag" | "menu") && host(app).settings().click_through {
+        return;
+    }
+    match (action, pointer) {
+        ("menu", _) => show_context_menu(app, &panel),
+        ("pet", Some(pointer)) => start_pet(app, &panel, pointer),
+        ("drag", Some(pointer)) => start_drag(app, &panel, pointer),
+        ("move", Some(pointer)) => { let _ = move_drag(app, &panel, pointer); }
+        ("release", pointer) => {
+            if let Some(pointer) = pointer {
+                let _ = move_drag(app, &panel, pointer);
+            }
+            stop_pet(app);
+            stop_drag(app);
+        }
+        _ => {}
     }
 }
 
@@ -592,6 +776,9 @@ fn on_settings_message(app: &AppHandle, body: &Value) {
 // MARK: Menu
 
 type Item = Box<dyn IsMenuItem<Wry>>;
+
+#[cfg(target_os = "linux")]
+struct TrayMenu(Menu<Wry>);
 
 fn check(app: &AppHandle, id: String, text: &str, checked: bool) -> tauri::Result<Item> {
     Ok(Box::new(CheckMenuItem::with_id(app, id, text, true, checked, None::<&str>)?))
@@ -634,6 +821,7 @@ fn toggle(app: &AppHandle, text: &str, key: &str, on: bool) -> tauri::Result<Ite
     check(app, format!("set:{key}={}", !on), text, on)
 }
 
+#[cfg(windows)]
 fn update_item(app: &AppHandle) -> tauri::Result<Item> {
     let version = app.package_info().version.to_string();
     if DEV {
@@ -649,10 +837,10 @@ fn update_item(app: &AppHandle) -> tauri::Result<Item> {
     }
 }
 
-fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let (s, hook_ready, autostart) = {
+fn menu_items(app: &AppHandle) -> tauri::Result<Vec<Item>> {
+    let (s, hook_ready, visible) = {
         let h = host(app);
-        (h.settings(), h.hook_ready, h.autostart)
+        (h.settings(), h.hook_ready, h.panel_visible)
     };
     let coat = s.coat.as_str();
     let mut items = vec![check(app, format!("set:style={}", json!(if s.style == "3d" { "2d" } else { "3d" })), "立体效果（3D）", s.style == "3d")?];
@@ -727,27 +915,57 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     items.push(toggle(app, "鼠标穿透（点击直接落到下层窗口）", "clickThrough", s.click_through)?);
     items.push(action(app, "settings", "调节反应…")?);
     items.push(separator(app)?);
-    if DEV {
-        items.push(note(app, "开机自启（开发模式不可用）")?);
-        items.push(note(app, "以管理员身份运行（开发模式不可用）")?);
-    } else {
-        items.push(check(app, "autostart".into(), "开机自启", autostart != Mode::Off)?);
-        items.push(check(app, "admin".into(), "以管理员身份运行（游戏里也有按键反馈）", s.run_as_admin)?);
+    #[cfg(windows)]
+    {
+        if DEV {
+            items.push(note(app, "开机自启（开发模式不可用）")?);
+            items.push(note(app, "以管理员身份运行（开发模式不可用）")?);
+        } else {
+            let autostart = host(app).autostart;
+            items.push(check(app, "autostart".into(), "开机自启", autostart != Mode::Off)?);
+            items.push(check(app, "admin".into(), "以管理员身份运行（游戏里也有按键反馈）", s.run_as_admin)?);
+        }
     }
     items.push(action(app, "home", "回到右下角")?);
-    let visible = panel(app).and_then(|panel| panel.is_visible().ok()).unwrap_or(false);
     items.push(action(app, "visibility", if visible { "隐藏" } else { "显示" })?);
     items.push(separator(app)?);
+    #[cfg(windows)]
     items.push(update_item(app)?);
-    if !DEV && !hook_ready {
+    if !hook_ready && (!cfg!(windows) || !cfg!(debug_assertions)) {
         items.push(note(app, "键盘监听未启动（详见 log.txt）")?);
     }
+    #[cfg(windows)]
     items.push(separator(app)?);
     items.push(action(app, "quit", "退出 KeyCat")?);
+    Ok(items)
+}
+
+fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
+    let items = menu_items(app)?;
     let refs: Vec<&dyn IsMenuItem<Wry>> = items.iter().map(|item| item.as_ref()).collect();
     Menu::with_items(app, &refs)
 }
 
+#[cfg(target_os = "linux")]
+fn rebuild_menu(app: &AppHandle) {
+    let refresh = || -> tauri::Result<()> {
+        // AppIndicator retains its original menu. Update the items in that menu in place.
+        let menu = &app.state::<TrayMenu>().0;
+        let items = menu_items(app)?;
+        for item in menu.items()? {
+            menu.remove(&item)?;
+        }
+        for item in items {
+            menu.append(item.as_ref())?;
+        }
+        Ok(())
+    };
+    if let Err(error) = refresh() {
+        log(&format!("menu refresh failed: {error}"));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 fn rebuild_menu(app: &AppHandle) {
     let Some(tray) = app.tray_by_id(TRAY) else { return };
     match build_menu(app) {
@@ -759,6 +977,7 @@ fn rebuild_menu(app: &AppHandle) {
 }
 
 /// Rebuilds the tray menu from any thread.
+#[cfg(windows)]
 fn refresh_menu(app: &AppHandle) {
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || rebuild_menu(&app2));
@@ -786,10 +1005,12 @@ fn on_menu(app: &AppHandle, id: &str) {
     } else {
         match id {
             "settings" => open_settings(app),
+            #[cfg(windows)]
             "autostart" => {
                 let on = host(app).autostart == Mode::Off;
                 set_autostart(app, if on { autostart_mode(app) } else { Mode::Off });
             }
+            #[cfg(windows)]
             "admin" => toggle_admin(app),
             "home" => {
                 {
@@ -802,10 +1023,13 @@ fn on_menu(app: &AppHandle, id: &str) {
             }
             "visibility" => {
                 if let Some(panel) = panel(app) {
-                    let _ = if panel.is_visible().unwrap_or(false) { panel.hide() } else { panel.show() };
+                    let visible = host(app).panel_visible;
+                    let _ = set_panel_visibility(app, &panel, !visible);
                 }
             }
+            #[cfg(windows)]
             "update:check" => check_for_updates(app),
+            #[cfg(windows)]
             "update:install" => install_update(app),
             "quit" => app.exit(0),
             _ => {}
@@ -817,6 +1041,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 // MARK: Administrator mode
 
 /// How start at login has to work for the way KeyCat runs now.
+#[cfg(windows)]
 fn autostart_mode(app: &AppHandle) -> Mode {
     if host(app).settings().run_as_admin && elevate::is_elevated() {
         Mode::Task
@@ -825,6 +1050,7 @@ fn autostart_mode(app: &AppHandle) -> Mode {
     }
 }
 
+#[cfg(windows)]
 fn set_autostart(app: &AppHandle, mode: Mode) {
     match autostart::set(mode) {
         Ok(()) => host(app).autostart = mode,
@@ -834,6 +1060,7 @@ fn set_autostart(app: &AppHandle, mode: Mode) {
 
 /// Moves an enabled start at login over to the kind that matches the administrator setting.
 /// Without elevation the task can be neither made nor removed, so that waits for an elevated run.
+#[cfg(windows)]
 fn sync_autostart(app: &AppHandle) {
     let current = host(app).autostart;
     let want = autostart_mode(app);
@@ -847,6 +1074,7 @@ fn sync_autostart(app: &AppHandle) {
 
 /// Turning it on restarts KeyCat elevated behind the UAC prompt; turning it off takes effect the
 /// next time KeyCat starts, since an elevated program cannot drop its rights.
+#[cfg(windows)]
 fn toggle_admin(app: &AppHandle) {
     let on = !host(app).settings().run_as_admin;
     host(app).store.set("runAsAdmin", json!(on));
@@ -868,6 +1096,7 @@ fn toggle_admin(app: &AppHandle) {
 /// Before anything else starts: a restart waits for the copy that launched it to quit (or
 /// single-instance would close it), and with the administrator setting on, a normal start hands
 /// over to an elevated one. Returns false when this process should quit at once.
+#[cfg(windows)]
 fn prepare_launch() -> bool {
     let args: Vec<String> = std::env::args().collect();
     if let Some(pid) = args.iter().position(|arg| arg == "--after").and_then(|i| args.get(i + 1)?.parse().ok()) {
@@ -930,20 +1159,20 @@ fn start_status_reports(app: &AppHandle) {
             thread::sleep(Duration::from_secs(1));
             let app2 = app.clone();
             let _ = app.run_on_main_thread(move || {
-                js(&app2, "window.webkit.messageHandlers.cat.postMessage({ ticks: cat.state.ticks })")
+                js(&app2, "window.keyCatHost.cat.postMessage({ ticks: cat.state.ticks, pointerActive: performance.now() / 1000 - cat.state.lastMouse < 2 })")
             });
             thread::sleep(Duration::from_secs(14));
         }
     });
 }
 
-fn write_status(app: &AppHandle, ticks: f64) {
+fn write_status(app: &AppHandle, ticks: f64, pointer_active: bool) {
     let (hook_ready, key_events) = {
         let h = host(app);
         (h.hook_ready, h.key_events)
     };
     let line = format!(
-        "{} keyboard={} keyEvents={key_events} fps={}\n",
+        "{} keyboard={} keyEvents={key_events} pointerActive={pointer_active} fps={}\n",
         timestamp(),
         if hook_ready { "active" } else { "missing" },
         ticks.round()
@@ -951,6 +1180,7 @@ fn write_status(app: &AppHandle, ticks: f64) {
     let _ = fs::write(data_dir().join("status.txt"), line);
 }
 
+#[cfg(windows)]
 fn set_update(app: &AppHandle, state: UpdateState) {
     let changed = {
         let mut h = host(app);
@@ -963,6 +1193,7 @@ fn set_update(app: &AppHandle, state: UpdateState) {
     }
 }
 
+#[cfg(windows)]
 fn check_for_updates(app: &AppHandle) {
     if DEV {
         return;
@@ -1024,6 +1255,7 @@ fn check_for_updates(app: &AppHandle) {
 }
 
 /// Runs the downloaded installer, which closes this process and starts the new version.
+#[cfg(windows)]
 fn install_update(app: &AppHandle) {
     let Some((update, bytes)) = host(app).downloaded.take() else { return };
     log(&format!("installing update {}", update.version));
@@ -1033,6 +1265,7 @@ fn install_update(app: &AppHandle) {
     }
 }
 
+#[cfg(windows)]
 fn start_update_checks(app: &AppHandle) {
     let app = app.clone();
     thread::spawn(move || {
@@ -1052,46 +1285,73 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     app.manage(Mutex::new(Host {
         store: Store::open(dir.join("settings.json")),
         page_ready: false,
+        panel_visible: false,
         hook_ready: false,
+        #[cfg(not(target_os = "linux"))]
         hit: "none".into(),
+        #[cfg(target_os = "linux")]
+        input_rectangles: Vec::new(),
         petting: false,
         drag: None,
         pending_delta: (0.0, 0.0),
+        #[cfg(not(target_os = "linux"))]
         last_pointer: None,
         last_cursor: (-9999, -9999),
+        #[cfg(not(target_os = "linux"))]
         size_fixes: 0,
         key_events: 0,
         held: HashSet::new(),
+        #[cfg(windows)]
         autostart: if DEV { Mode::Off } else { autostart::current() },
+        #[cfg(windows)]
         update: UpdateState::Idle,
+        #[cfg(windows)]
         downloaded: None,
     }));
     create_panel(app)?;
+    start_pump(app);
+    let menu = build_menu(app)?;
+    #[cfg(target_os = "linux")]
+    app.manage(TrayMenu(menu.clone()));
     TrayIconBuilder::with_id(TRAY)
         .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
         .tooltip("KeyCat")
+        .menu(&menu)
         .show_menu_on_left_click(true)
         .build(app)?;
-    start_pump(app);
-    // Built after the hook came up, so a failed hook shows in the menu.
-    rebuild_menu(app);
-    start_update_checks(app);
-    sync_autostart(app);
-    log(&format!("started v{} elevated={}", app.package_info().version, elevate::is_elevated()));
+    #[cfg(windows)]
+    {
+        start_update_checks(app);
+        sync_autostart(app);
+        log(&format!("started v{} elevated={}", app.package_info().version, elevate::is_elevated()));
+    }
+    #[cfg(not(windows))]
+    log(&format!("started v{}", app.package_info().version));
     Ok(())
 }
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("GDK_BACKEND").is_none() {
+        // XWayland supports an explicitly positioned, click-through always-on-top window.
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
+    #[cfg(windows)]
     if !prepare_launch() {
         return;
     }
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(panel) = panel(app) {
-                let _ = panel.show();
+    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(panel) = panel(&app2) {
+                let _ = set_panel_visibility(&app2, &panel, true);
+                rebuild_menu(&app2);
             }
-        }))
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        });
+    }));
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    builder
         .invoke_handler(tauri::generate_handler![host_message])
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
         .setup(|app| Ok(setup(app.handle())?))

@@ -116,14 +116,21 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+#[path = "linux_input.rs"]
+mod imp;
+
+#[cfg(target_os = "linux")]
+pub use imp::take_motion;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod imp {
     use std::sync::mpsc::Sender;
 
     use super::Input;
 
     pub fn start(_sink: Sender<Input>) -> Result<(), String> {
-        Err("global input is only implemented for Windows".into())
+        Err("global input is unavailable on this platform".into())
     }
 }
 

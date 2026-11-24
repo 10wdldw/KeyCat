@@ -228,13 +228,37 @@
   chinLine.scale.copy(R);
   head.add(headRim, chinLine, headMesh);
 
-  // Ears: rounded triangles whose bases flare into the head, so the outline curves smoothly from
-  // head to ear instead of meeting it at a notch. The outline is the same shape grown evenly.
+  // Ears: rounded triangles whose bases flare into the head.
   const earPts = [[0.28, -0.06], [0.255, 0.02], [0.225, 0.1], [0.185, 0.19], [0.135, 0.27], [0.08, 0.33], [0.035, 0.36], [0, 0.37]];
   const earLathe = grow => {
     const pts = earPts.map(([r, y], i) => new THREE.Vector2(r + grow, y + grow * (i / (earPts.length - 1)) ** 2));
     pts.unshift(new THREE.Vector2(0, -0.06));
-    return new THREE.LatheGeometry(new THREE.SplineCurve(pts).getSpacedPoints(30), 40);
+    const profile = new THREE.SplineCurve(pts).getSpacedPoints(30);
+    const join = profile.findIndex(point => point.y >= 0.02);
+    const flank = profile[join], next = profile[join + 1];
+    const flankSlope = (next.x - flank.x) / (next.y - flank.y);
+    const shoulder = new THREE.Vector2(0.292 + grow, -0.14);
+    const shoulderSlope = 0.15;
+    const rise = (flank.y - shoulder.y) / 3;
+    // Guide the visible slope into the cheek before rounding the cap under the head.
+    const rootFlank = new THREE.CubicBezierCurve(
+      shoulder,
+      new THREE.Vector2(shoulder.x + shoulderSlope * rise, shoulder.y + rise),
+      new THREE.Vector2(flank.x - flankSlope * rise, flank.y - rise),
+      flank,
+    );
+    const baseY = -0.185, handle = (shoulder.y - baseY) * 0.68;
+    const cap = new THREE.CubicBezierCurve(
+      new THREE.Vector2(0, baseY),
+      new THREE.Vector2(shoulder.x * 0.68, baseY),
+      new THREE.Vector2(shoulder.x - shoulderSlope * handle, shoulder.y - handle),
+      shoulder,
+    );
+    const capSamples = 6;
+    profile.splice(0, join,
+      ...cap.getSpacedPoints(capSamples).slice(0, -1),
+      ...rootFlank.getPoints(join - capSamples).slice(0, -1));
+    return new THREE.LatheGeometry(profile, 40);
   };
   const earShape = [earLathe(0), earLathe(0.026)];
   // Bigger ears (the Devon's) grow taller and broader above the base, but the base keeps its

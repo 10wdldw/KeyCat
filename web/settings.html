@@ -41,7 +41,7 @@
 <script src="tuning.js"></script>
 <script>
 'use strict';
-const send = msg => window.webkit?.messageHandlers?.settings?.postMessage(msg);
+const send = msg => (window.keyCatHost?.settings ?? window.webkit?.messageHandlers?.settings)?.postMessage(msg);
 const values = { ...TUNING };
 const inputs = {};
 const fmt = (it, v) => (it.step < 1 ? Number(v).toFixed(1) : String(v)) + ' ' + it.unit;
