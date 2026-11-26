@@ -822,10 +822,16 @@ fn toggle(app: &AppHandle, text: &str, key: &str, on: bool) -> tauri::Result<Ite
 }
 
 #[cfg(windows)]
+const UPSTREAM_UPDATES: bool = option_env!("KEYCAT_DISABLE_UPSTREAM_UPDATES").is_none();
+
+#[cfg(windows)]
 fn update_item(app: &AppHandle) -> tauri::Result<Item> {
     let version = app.package_info().version.to_string();
     if DEV {
         return note(app, &format!("开发模式 v{version}"));
+    }
+    if !UPSTREAM_UPDATES {
+        return note(app, &format!("KeyCat 社区版 v{version}"));
     }
     match host(app).update.clone() {
         UpdateState::Ready(new) => action(app, "update:install", &format!("重启并更新到 v{new}")),
@@ -1195,7 +1201,7 @@ fn set_update(app: &AppHandle, state: UpdateState) {
 
 #[cfg(windows)]
 fn check_for_updates(app: &AppHandle) {
-    if DEV {
+    if DEV || !UPSTREAM_UPDATES {
         return;
     }
     {
@@ -1321,7 +1327,9 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         .build(app)?;
     #[cfg(windows)]
     {
-        start_update_checks(app);
+        if UPSTREAM_UPDATES {
+            start_update_checks(app);
+        }
         sync_autostart(app);
         log(&format!("started v{} elevated={}", app.package_info().version, elevate::is_elevated()));
     }
